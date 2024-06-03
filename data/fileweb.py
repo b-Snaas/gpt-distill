@@ -1,20 +1,3 @@
-"""
-FineWeb dataset (for srs pretraining)
-https://huggingface.co/datasets/HuggingFaceFW/fineweb
-
-example doc to highlight the structure of the dataset:
-{
-  "text": "Posted by mattsmith on 20th April 2012\nStraight from...",
-  "id": "<urn:uuid:d853d453-196e-4488-a411-efc2b26c40d2>",
-  "dump": "CC-MAIN-2013-20",
-  "url": "http://nleastchatter.com/philliesphandom/tag/freddy-galvis/",
-  "date": "2013-05-18T07:24:47Z",
-  "file_path": "s3://commoncrawl/long.../path.../file.gz",
-  "language": "en",
-  "language_score": 0.9185474514961243,
-  "token_count": 594
-}
-"""
 import os
 import argparse
 import multiprocessing as mp
@@ -23,8 +6,7 @@ import tiktoken
 # from huggingface_hub import snapshot_download
 from datasets import load_dataset
 from tqdm import tqdm
-import argparse
-import numpy as np
+
 def write_datafile(filename, toks):
     """ 
     Saves token data as a .bin file, for reading in C.
@@ -50,6 +32,15 @@ def write_datafile(filename, toks):
     with open(filename, "wb") as f:
         f.write(header.tobytes())
         f.write(toks_np.tobytes())
+
+def get_last_shard_index(data_cache_dir):
+    """ Determine the last processed shard index based on existing files. """
+    shard_files = [f for f in os.listdir(data_cache_dir) if f.endswith('.bin')]
+    if not shard_files:
+        return -1  # No shard files found
+    shard_indices = [int(f.split('_')[-1].split('.')[0]) for f in shard_files]
+    return max(shard_indices)
+
 # ------------------------------------------
 
 parser = argparse.ArgumentParser(description="FineWeb dataset preprocessing")
@@ -70,15 +61,19 @@ elif args.version == "100B":
 DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), local_dir)
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 
+# Determine the last processed shard index
+last_shard_index = get_last_shard_index(DATA_CACHE_DIR)
+
 # download the dataset
 fw = load_dataset("HuggingFaceFW/fineweb", name=remote_name, split="train")
 
 # init the tokenizer
 enc = tiktoken.get_encoding("gpt2")
 eot = enc._special_tokens['<|endoftext|>'] # end of text token
+
 def tokenize(doc):
     # tokenizes a single document and returns a numpy array of uint16 tokens
-    tokens = [eot] # the special <|endoftext|> token delimits all documents
+    tokens = [eot]  # the special <|endoftext|> delimits all documents
     tokens.extend(enc.encode_ordinary(doc["text"]))
     tokens_np = np.array(tokens)
     assert (0 <= tokens_np).all() and (tokens_np < 2**16).all(), "token dictionary too large for uint16"
@@ -86,15 +81,20 @@ def tokenize(doc):
     return tokens_np_uint16
 
 # tokenize all documents and write output shards, each of shard_size tokens (last shard has remainder)
-nprocs = max(1, os.cpu_count() - 2) # don't hog the entire system
+nprocs = max(1, os.cpu_count() - 2)  # don't hog the entire system
 with mp.Pool(nprocs) as pool:
-    shard_index = 0
-    # preallocate buffer to hold current shard
+    shard_index = last_shard_index + 1  # Start from the next shard
     all_tokens_np = np.empty((args.shard_size,), dtype=np.uint16)
     token_count = 0
     progress_bar = None
-    for tokens in pool.imap(tokenize, fw, chunksize=16):
+    doc_index = 0
 
+    for tokens in pool.imap(tokenize, fw, chunksize=16):
+        # Skip already processed documents if needed
+        if doc_index < shard_index:
+            doc_index += 1
+            continue
+        
         # is there enough space in the current shard for the new tokens?
         if token_count + len(tokens) < args.shard_size:
             # simply append tokens to current shard
