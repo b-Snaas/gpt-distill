@@ -241,7 +241,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             val_loss_every=128, 
             val_max_steps=20
             ):
-    wandb.init(project="gpt2_training", config={
+    wandb.init(project="gpt2_distill", config={
         "input_bin": input_bin,
         "input_val_bin": input_val_bin,
         "model": model,
