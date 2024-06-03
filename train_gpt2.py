@@ -14,6 +14,8 @@ import torch._inductor.config as config
 
 import fire
 
+torch.set_float32_matmul_precision('high')
+
 with open(sys.argv[0]) as f:
     code = f.read()
 
