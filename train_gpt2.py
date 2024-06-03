@@ -11,8 +11,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torch._inductor.config as config
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
 
 import fire
 
@@ -146,7 +144,7 @@ class GPT(nn.Module):
         return optimizer
 
 # -----------------------------------------------------------------------------
-# Our own simple Distributed Data Loader
+# Our own simple Data Loader
 
 def _peek_data_shard(filename):
     # only reads the header, returns header data
@@ -175,10 +173,8 @@ def _load_data_shard(filename):
     assert len(tokens) == ntok, "number of tokens read does not match header?"
     return tokens
 
-class DistributedDataLoader:
-    def __init__(self, filename_pattern, B, T, process_rank, num_processes):
-        self.process_rank = process_rank
-        self.num_processes = num_processes
+class DataLoader:
+    def __init__(self, filename_pattern, B, T):
         self.B = B
         self.T = T
 
@@ -190,22 +186,22 @@ class DistributedDataLoader:
         ntok_total = 0
         for fname in self.files:
             shard_ntok = _peek_data_shard(fname)
-            assert shard_ntok >= num_processes * B * T + 1
+            assert shard_ntok >= B * T + 1
             ntok_total += shard_ntok
         self.ntok_total = ntok_total
-        print0(f"DataLoader: total number of tokens: {ntok_total:,} across {len(self.files)} files")
+        print(f"DataLoader: total number of tokens: {ntok_total:,} across {len(self.files)} files")
 
         # kick things off
         self.reset()
 
     def reset(self):
         self.current_shard = 0
-        self.current_position = self.process_rank * self.B * self.T
+        self.current_position = 0
         self.tokens = _load_data_shard(self.files[self.current_shard])
 
     def advance(self): # advance to next data shard
         self.current_shard = (self.current_shard + 1) % len(self.files)
-        self.current_position = self.process_rank * self.B * self.T
+        self.current_position = 0
         self.tokens = _load_data_shard(self.files[self.current_shard])
 
     def next_batch(self):
@@ -216,8 +212,8 @@ class DistributedDataLoader:
         x = (buf[:-1]).view(B, T) # inputs
         y = (buf[1:]).view(B, T) # targets
         # advance current position and load next shard if necessary
-        self.current_position += B * T * self.num_processes
-        if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
+        self.current_position += B * T
+        if self.current_position + (B * T + 1) > len(self.tokens):
             self.advance()
         return x.cuda(), y.cuda()
 
@@ -227,16 +223,14 @@ class DistributedDataLoader:
 def print0(*args, **kwargs):
     # modified print that only prints from the master process
     # if this is not a distributed run, it's just a print
-    if int(os.environ.get("RANK", 0)) == 0:
-        print(*args, **kwargs)
+    print(*args, **kwargs)
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             output_dir= "pylog124M", 
             model="d12", 
-            batch_size=32, 
-            sequence_length=512, 
-            total_batch_size=524288, 
+            batch_size=64, 
+            sequence_length=1024, 
             num_iterations=12288, 
             learning_rate=0.0018, 
             warmup_iters=256, 
@@ -251,21 +245,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     assert 1 <= T <= 1024
     assert model in {"d12", "d24", "d36", "d48"}
 
-    # set up DDP (distributed data parallel). torchrun sets this env variable
-    # use of DDP atm demands CUDA, we set the device appropriately according to rank
-    assert torch.cuda.is_available(), "for now i think we need CUDA for DDP"
-    init_process_group(backend='nccl')
-    ddp_rank = int(os.environ['RANK'])
-    ddp_local_rank = int(os.environ['LOCAL_RANK'])
-    ddp_world_size = int(os.environ['WORLD_SIZE'])
-    device = f'cuda:{ddp_local_rank}'
+    assert torch.cuda.is_available(), "CUDA is required"
+    device = 'cuda:0'
     torch.cuda.set_device(device)
-    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
-    seed_offset = 0 # each process gets the exact same seed
     print(f"using device: {device}")
-
-    tokens_per_fwdbwd = B * T * ddp_world_size
-    assert total_batch_size == tokens_per_fwdbwd
 
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
@@ -285,15 +268,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     model = torch.compile(model)
 
     # load tokens
-    train_loader = DistributedDataLoader(input_bin, B, T, ddp_rank, ddp_world_size)
+    train_loader = DataLoader(input_bin, B, T)
     val_loader = None
     if input_val_bin:
-        val_loader = DistributedDataLoader(input_val_bin, B, T, ddp_rank, ddp_world_size)
+        val_loader = DataLoader(input_val_bin, B, T)
     x, y = train_loader.next_batch()
 
-    # here we wrap model into DDP container
-    model = DDP(model, device_ids=[ddp_local_rank])
-    raw_model = model.module # always contains the "raw" unwrapped model
+    raw_model = model
 
     # init the optimizer
     optimizer = raw_model.configure_optimizers(weight_decay=weight_decay,
@@ -315,7 +296,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # create the logging directory if it does not exist
     logfile = None
-    if master_process and output_dir:
+    if output_dir:
         os.makedirs(output_dir, exist_ok=True)
         logfile = os.path.join(output_dir, "%s.log" % run_id)
         # create the log file "main.log" inside it, and wipe it clean
@@ -342,14 +323,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss /= val_max_steps
             # log to console and to file
             print0(f"val loss {val_loss}")
-            if master_process and logfile is not None:
+            if logfile is not None:
                 with open(logfile, "a") as f:
                     f.write("s:%d tel:%f\n" % (step, val_loss))
 
-        # bit confusing: we want to make sure to eval on 0th iteration
-        # but also after the very last iteration. so we loop for step <= num_iterations
-        # instead of just < num_iterations (one extra due to <=), only to do
-        # the validation/sampling one last time, and then we break right here as we're done.
         if last_step:
             break
 
@@ -378,11 +355,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # time and print
         t1 = time.time()
         # the 0th iteration is often an outlier (much slower) => skip logging it
-        tokens_per_second = ddp_world_size * B * T / (t1-t0)
+        tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
         print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         # log to logile
-        if master_process and logfile is not None:
+        if logfile is not None:
             with open(logfile, "a") as f:
                 f.write("s:%d trl:%f\n" % (step, lossf))
 
@@ -397,14 +374,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # -------------------------------------------------------------------------
 
-    if master_process:
-        log = dict(model=raw_model.state_dict(), code=code, args=locals())
-        os.makedirs('logs', exist_ok=True)
-        torch.save(log, 'logs/%s.pt' % run_id)
-
-    # -------------------------------------------------------------------------
-    # clean up nice
-    destroy_process_group()
+    log = dict(model=raw_model.state_dict(), code=code, args=locals())
+    os.makedirs('logs', exist_ok=True)
+    torch.save(log, 'logs/%s.pt' % run_id)
 
 if __name__ == "__main__":
     fire.Fire(train)
