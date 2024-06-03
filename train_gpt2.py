@@ -4,6 +4,7 @@ import uuid
 import math
 import glob
 from dataclasses import dataclass
+import time
 
 import numpy as np
 import torch
@@ -12,6 +13,8 @@ import torch.nn.functional as F
 import torch._inductor.config as config
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+
+import fire
 
 with open(sys.argv[0]) as f:
     code = f.read()
@@ -227,36 +230,26 @@ def print0(*args, **kwargs):
     if int(os.environ.get("RANK", 0)) == 0:
         print(*args, **kwargs)
 
-if __name__ == "__main__":
-    import time
-    import argparse
+def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
+            input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
+            output_dir= "pylog124M", 
+            model="d12", 
+            batch_size=32, 
+            sequence_length=512, 
+            total_batch_size=524288, 
+            num_iterations=12288, 
+            learning_rate=0.0018, 
+            warmup_iters=256, 
+            weight_decay=0.1,
+            val_loss_every=128, 
+            val_max_steps=20
+            ):
     print0(f"Running pytorch {torch.version.__version__}")
 
-    parser = argparse.ArgumentParser()
-    # file system input / output
-    parser.add_argument("--input_bin", type=str, default="dev/data/tinyshakespeare/tiny_shakespeare_val.bin", help="input .bin to train on")
-    parser.add_argument("--input_val_bin", type=str, default="", help="input .bin to eval validation loss on")
-    parser.add_argument("--output_dir", type=str, default="", help="output directory to which to write logs and checkpoints")
-    parser.add_argument("--model", type=str, default="gpt2", help="gpt2|gpt2-medium|gpt2-large|gpt2-xl|d12|d24|d36|d48")
-    # token layout for each step of the optimization
-    parser.add_argument("--batch_size", type=int, default=4, help="batch size, in units of #batch dimensions")
-    parser.add_argument("--sequence_length", type=int, default=64, help="sequence length")
-    parser.add_argument("--total_batch_size", type=int, default=256, help="total desired batch size, in units of #tokens")
-    # workload (number of steps)
-    parser.add_argument("--num_iterations", type=int, default=10, help="number of iterations to run")
-    # optimization
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="learning rate warmup iterations")
-    parser.add_argument("--warmup_iters", type=int, default=0, help="learning rate warmup iterations")
-    parser.add_argument("--weight_decay", type=float, default=0.0, help="weight decay")
-    # evaluation
-    parser.add_argument("--val_loss_every", type=int, default=0, help="every how mant steps to evaluate val loss?")
-    parser.add_argument("--val_max_steps", type=int, default=20, help="how many batches of val to average?")
-    args = parser.parse_args()
-
     # args error checking and convenience variables
-    B, T = args.batch_size, args.sequence_length
+    B, T = batch_size, sequence_length
     assert 1 <= T <= 1024
-    assert args.model in {"d12", "d24", "d36", "d48"}
+    assert model in {"d12", "d24", "d36", "d48"}
 
     # set up DDP (distributed data parallel). torchrun sets this env variable
     # use of DDP atm demands CUDA, we set the device appropriately according to rank
@@ -272,7 +265,7 @@ if __name__ == "__main__":
     print(f"using device: {device}")
 
     tokens_per_fwdbwd = B * T * ddp_world_size
-    assert args.total_batch_size == tokens_per_fwdbwd
+    assert total_batch_size == tokens_per_fwdbwd
 
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
@@ -283,7 +276,7 @@ if __name__ == "__main__":
         "d24": GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024),
         "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),
         "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),
-    }[args.model]
+    }[model]
     model = GPT(model_config)
     model = model.train().cuda()
     if hasattr(config, "coordinate_descent_tuning"):
@@ -292,10 +285,10 @@ if __name__ == "__main__":
     model = torch.compile(model)
 
     # load tokens
-    train_loader = DistributedDataLoader(args.input_bin, B, T, ddp_rank, ddp_world_size)
+    train_loader = DistributedDataLoader(input_bin, B, T, ddp_rank, ddp_world_size)
     val_loader = None
-    if args.input_val_bin:
-        val_loader = DistributedDataLoader(args.input_val_bin, B, T, ddp_rank, ddp_world_size)
+    if input_val_bin:
+        val_loader = DistributedDataLoader(input_val_bin, B, T, ddp_rank, ddp_world_size)
     x, y = train_loader.next_batch()
 
     # here we wrap model into DDP container
@@ -303,50 +296,50 @@ if __name__ == "__main__":
     raw_model = model.module # always contains the "raw" unwrapped model
 
     # init the optimizer
-    optimizer = raw_model.configure_optimizers(weight_decay=args.weight_decay,
-                                               learning_rate=args.learning_rate, betas=(0.9, 0.95),
+    optimizer = raw_model.configure_optimizers(weight_decay=weight_decay,
+                                               learning_rate=learning_rate, betas=(0.9, 0.95),
                                                device_type=device)
 
     # learning rate decay scheduler
     def get_lr(it):
-        assert it <= args.num_iterations
+        assert it <= num_iterations
         # 1) linear warmup for warmup_iters steps
-        if it < args.warmup_iters:
-            return args.learning_rate * (it+1) / args.warmup_iters
+        if it < warmup_iters:
+            return learning_rate * (it+1) / warmup_iters
         # 2) linear decay down to min learning rate
-        decay_ratio = (it - args.warmup_iters) / (args.num_iterations - args.warmup_iters)
+        decay_ratio = (it - warmup_iters) / (num_iterations - warmup_iters)
         assert 0 <= decay_ratio <= 1
-        return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * args.learning_rate
+        return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * learning_rate
 
     run_id = str(uuid.uuid4())
 
     # create the logging directory if it does not exist
     logfile = None
-    if master_process and args.output_dir:
-        os.makedirs(args.output_dir, exist_ok=True)
-        logfile = os.path.join(args.output_dir, "%s.log" % run_id)
+    if master_process and output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        logfile = os.path.join(output_dir, "%s.log" % run_id)
         # create the log file "main.log" inside it, and wipe it clean
         with open(logfile, "w") as f:
             pass
 
     timings = []
-    for step in range(args.num_iterations + 1):
+    for step in range(num_iterations + 1):
         t0 = time.time()
-        last_step = (step == args.num_iterations)
+        last_step = (step == num_iterations)
 
         # once in a while evaluate the validation dataset
-        if (args.val_loss_every > 0 \
-            and (step % args.val_loss_every == 0 or last_step)) \
+        if (val_loss_every > 0 \
+            and (step % val_loss_every == 0 or last_step)) \
             and (val_loader is not None):
             model.eval()
             val_loader.reset()
             with torch.no_grad():
                 val_loss = 0.0
-                for _ in range(args.val_max_steps):
+                for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
                     _, loss = model(x_val, y_val, return_logits=False)
                     val_loss += loss.item()
-                val_loss /= args.val_max_steps
+                val_loss /= val_max_steps
             # log to console and to file
             print0(f"val loss {val_loss}")
             if master_process and logfile is not None:
@@ -387,14 +380,14 @@ if __name__ == "__main__":
         # the 0th iteration is often an outlier (much slower) => skip logging it
         tokens_per_second = ddp_world_size * B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
-        print0(f"step {step+1:4d}/{args.num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
+        print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         # log to logile
         if master_process and logfile is not None:
             with open(logfile, "a") as f:
                 f.write("s:%d trl:%f\n" % (step, lossf))
 
         # keep track of smooth timings, last 20 iterations
-        if step > 0 and step > args.num_iterations - 20:
+        if step > 0 and step > num_iterations - 20:
             timings.append(t1-t0)
 
     # print the average of the last 20 timings, to get something smooth-ish
@@ -405,10 +398,13 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
 
     if master_process:
-        log = dict(model=raw_model.state_dict(), code=code, args=args.__dict__)
+        log = dict(model=raw_model.state_dict(), code=code, args=locals())
         os.makedirs('logs', exist_ok=True)
         torch.save(log, 'logs/%s.pt' % run_id)
 
     # -------------------------------------------------------------------------
     # clean up nice
     destroy_process_group()
+
+if __name__ == "__main__":
+    fire.Fire(train)
