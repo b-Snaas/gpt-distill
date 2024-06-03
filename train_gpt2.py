@@ -13,6 +13,7 @@ import torch.nn.functional as F
 import torch._inductor.config as config
 
 import fire
+import wandb
 
 torch.set_float32_matmul_precision('high')
 
@@ -229,7 +230,7 @@ def print0(*args, **kwargs):
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            output_dir= "pylog124M", 
+            output_dir= None, 
             model="d12", 
             batch_size=64, 
             sequence_length=1024, 
@@ -240,6 +241,20 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             val_loss_every=128, 
             val_max_steps=20
             ):
+    wandb.init(project="gpt2_training", config={
+        "input_bin": input_bin,
+        "input_val_bin": input_val_bin,
+        "model": model,
+        "batch_size": batch_size,
+        "sequence_length": sequence_length,
+        "num_iterations": num_iterations,
+        "learning_rate": learning_rate,
+        "warmup_iters": warmup_iters,
+        "weight_decay": weight_decay,
+        "val_loss_every": val_loss_every,
+        "val_max_steps": val_max_steps
+    })
+
     print0(f"Running pytorch {torch.version.__version__}")
 
     # args error checking and convenience variables
@@ -296,15 +311,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     run_id = str(uuid.uuid4())
 
-    # create the logging directory if it does not exist
-    logfile = None
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-        logfile = os.path.join(output_dir, "%s.log" % run_id)
-        # create the log file "main.log" inside it, and wipe it clean
-        with open(logfile, "w") as f:
-            pass
-
     timings = []
     for step in range(num_iterations + 1):
         t0 = time.time()
@@ -323,11 +329,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                     _, loss = model(x_val, y_val, return_logits=False)
                     val_loss += loss.item()
                 val_loss /= val_max_steps
-            # log to console and to file
+            # log to console and to wandb
             print0(f"val loss {val_loss}")
-            if logfile is not None:
-                with open(logfile, "a") as f:
-                    f.write("s:%d tel:%f\n" % (step, val_loss))
+            wandb.log({"val_loss": val_loss}, step=step)
 
         if last_step:
             break
@@ -360,10 +364,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
         print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
-        # log to logile
-        if logfile is not None:
-            with open(logfile, "a") as f:
-                f.write("s:%d trl:%f\n" % (step, lossf))
+        # log to wandb
+        wandb.log({"train_loss": lossf, "lr": lr, "tokens_per_second": tokens_per_second}, step=step)
 
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
