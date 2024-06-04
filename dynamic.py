@@ -272,6 +272,11 @@ def print0(*args, **kwargs):
     # if this is not a distributed run, it's just a print
     print(*args, **kwargs)
 
+def log_memory_usage(event_name, current_depth=None, batch_size=None):
+    allocated_memory = torch.cuda.memory_allocated() / (1024 ** 2) # Convert bytes to MB
+    max_allocated_memory = torch.cuda.max_memory_allocated() / (1024 ** 2) # Convert bytes to MB
+    print0(f"{event_name}: Allocated Memory: {allocated_memory:.2f} MB, Max Allocated Memory: {max_allocated_memory:.2f} MB, Depth: {current_depth}, Batch Size: {batch_size}")
+
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
           input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
           output_dir=None, 
@@ -306,6 +311,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     torch.cuda.set_device(device)
     print(f"using device: {device}")
 
+    log_memory_usage("Start of Training")
+
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
@@ -326,10 +333,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Define depth and batch size mappings
     depth = model_config.n_layer
     batch_size_by_depth = {
-        depth // 4: 100,
-        2 * (depth // 4): 64,
-        3 * (depth // 4): 53,
-        depth: 42
+        depth // 4: 60,
+        2 * (depth // 4): 40,
+        3 * (depth // 4): 28,
+        depth: 21
     }
 
     lr_by_depth = {
@@ -410,22 +417,30 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
         # forward pass
-        # forward pass
+        log_memory_usage(f"Before Forward Pass, Step {step+1}", current_depth, B)
         with ctx:
             losses, y_1st, y_2nd, y_3rd, y_4th = model(x, y, return_logits=False, current_depth=current_depth)
+        log_memory_usage(f"After Forward Pass, Step {step+1}", current_depth, B)
+
         # advance the dataset for the next batch
         x, y = train_loader.next_batch(batch_size=B)
+
         # backward pass
         current_loss = losses[-1]
         current_loss.backward()
+        log_memory_usage(f"After Backward Pass, Step {step+1}", current_depth, B)
+
         for p in model.parameters():
             p.grad = p.grad / (p.grad.norm() + 1e-6)
+
         # set the learning rate for this iteration
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
+
         # step the optimizer
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
+        log_memory_usage(f"After Optimizer Step, Step {step+1}", current_depth, B)
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
