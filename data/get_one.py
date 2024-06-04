@@ -63,12 +63,17 @@ os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 # Determine the last processed shard index
 last_shard_index = get_last_shard_index(DATA_CACHE_DIR)
 
-# download the dataset metadata
+# download the dataset metadata and stream the data
 fw = load_dataset("HuggingFaceFW/fineweb", name=remote_name, split="train", streaming=True)
 
 # Take only a small subset of the dataset
 small_subset = [next(iter(fw)) for _ in range(100)]  # Adjust the number of samples as needed
-fw = Dataset.from_dict(small_subset)
+
+# Transform small_subset to a dictionary format expected by Dataset.from_dict
+columns = small_subset[0].keys()
+small_subset_dict = {col: [item[col] for item in small_subset] for col in columns}
+
+fw = Dataset.from_dict(small_subset_dict)
 
 # init the tokenizer
 enc = tiktoken.get_encoding("gpt2")
