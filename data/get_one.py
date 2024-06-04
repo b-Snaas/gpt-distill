@@ -3,8 +3,7 @@ import argparse
 import multiprocessing as mp
 import numpy as np
 import tiktoken
-# from huggingface_hub import snapshot_download
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from tqdm import tqdm
 
 def write_datafile(filename, toks):
@@ -64,16 +63,20 @@ os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 # Determine the last processed shard index
 last_shard_index = get_last_shard_index(DATA_CACHE_DIR)
 
-# download the dataset
-fw = load_dataset("HuggingFaceFW/fineweb", name=remote_name, split="train[:2%]")
+# download the dataset metadata
+fw = load_dataset("HuggingFaceFW/fineweb", name=remote_name, split="train", streaming=True)
+
+# Take only a small subset of the dataset
+small_subset = [next(iter(fw)) for _ in range(100)]  # Adjust the number of samples as needed
+fw = Dataset.from_dict(small_subset)
 
 # init the tokenizer
 enc = tiktoken.get_encoding("gpt2")
-eot = enc._special_tokens['<|endoftext|>'] # end of text token
+eot = enc.encode("<|endoftext|>")[0] # end of text token
 
 def tokenize(doc):
     # tokenizes a single document and returns a numpy array of uint16 tokens
-    tokens = [eot]  # the special <|endoftext|> delimits all documents
+    tokens = [eot]  # the special  delimits all documents
     tokens.extend(enc.encode_ordinary(doc["text"]))
     tokens_np = np.array(tokens)
     assert (0 <= tokens_np).all() and (tokens_np < 2**16).all(), "token dictionary too large for uint16"
