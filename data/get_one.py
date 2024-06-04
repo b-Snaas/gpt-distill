@@ -77,7 +77,7 @@ fw = Dataset.from_dict(small_subset_dict)
 
 # init the tokenizer
 enc = tiktoken.get_encoding("gpt2")
-eot = enc.encode("<|endoftext|>")[0] # end of text token
+eot = enc.encode("<|endoftext|>")
 
 def tokenize(doc):
     # tokenizes a single document and returns a numpy array of uint16 tokens
