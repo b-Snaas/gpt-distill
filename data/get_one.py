@@ -44,7 +44,7 @@ def get_last_shard_index(data_cache_dir):
 
 parser = argparse.ArgumentParser(description="FineWeb dataset preprocessing")
 parser.add_argument("-v", "--version", type=str, default="10B", help="Which version of fineweb to use 10B|100B")
-parser.add_argument("-s", "--shard_size", type=int, default=10**8, help="Size of each shard in tokens")
+parser.add_argument("-s", "--shard_size", type=int, default=10**4, help="Size of each shard in tokens")  # Adjusted shard size to 100,000 tokens
 args = parser.parse_args()
 
 # FineWeb has a few possible subsamples available
