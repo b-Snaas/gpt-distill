@@ -276,6 +276,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
           input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
           output_dir=None, 
           model="d12", 
+          batch_size=64, 
           sequence_length=1024, 
           num_iterations=12288, 
           learning_rate=0.0018, 
@@ -288,6 +289,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "input_bin": input_bin,
         "input_val_bin": input_val_bin,
         "model": model,
+        "batch_size": batch_size,
         "sequence_length": sequence_length,
         "num_iterations": num_iterations,
         "learning_rate": learning_rate,
@@ -299,7 +301,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     print0(f"Running pytorch {torch.version.__version__}")
 
-    T = sequence_length
+    # args error checking and convenience variables
+    B, T = batch_size, sequence_length
     assert 1 <= T <= 1024
     assert model in {"d12", "d24", "d36", "d48"}
 
@@ -328,17 +331,17 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Define depth and batch size mappings
     depth = model_config.n_layer
     batch_size_by_depth = {
-        depth // 4: 100,
-        2 * (depth // 4): 64,
-        3 * (depth // 4): 53,
-        depth: 42
+        depth // 4: 465,
+        2 * (depth // 4): 255,
+        3 * (depth // 4): 175,
+        depth: 130
     }
 
     lr_by_depth = {
-        depth // 4: 0.0005,
-        2 * (depth // 4): 0.00035,
-        3 * (depth // 4): 0.00025,
-        depth: 0.00018
+        depth // 4: 1e-3,
+        2 * (depth // 4): 5e-4,
+        3 * (depth // 4): 3e-4,
+        depth: 1e-4
     }
 
     # Initial dynamic depth selection
