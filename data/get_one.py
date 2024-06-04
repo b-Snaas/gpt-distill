@@ -77,11 +77,11 @@ fw = Dataset.from_dict(small_subset_dict)
 
 # init the tokenizer
 enc = tiktoken.get_encoding("gpt2")
-eot = enc.encode("<|endoftext|>")
+eot = enc.encode("<|endoftext|>")[0]  # end of text token
 
 def tokenize(doc):
     # tokenizes a single document and returns a numpy array of uint16 tokens
-    tokens = [eot]  # the special  delimits all documents
+    tokens = [eot]  # the special token that delimits all documents
     tokens.extend(enc.encode_ordinary(doc["text"]))
     tokens_np = np.array(tokens)
     assert (0 <= tokens_np).all() and (tokens_np < 2**16).all(), "token dictionary too large for uint16"
