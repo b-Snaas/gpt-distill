@@ -93,54 +93,80 @@ class GPTConfig:
     n_embd: int = 768
 
 class GPT(nn.Module):
-
-    def __init__(self, config):
+    def __init__(self, config, shared_dist_layer_weights=True):
         super().__init__()
         self.config = config
+        self.shared_dist_layer_weights = shared_dist_layer_weights
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.lm_head.LLMC_SKIP_INIT = 1 # don't init this one, we will tie weights
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        self.dist_layers = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size, bias=False) for _ in range(4)])
+        
+        if self.shared_dist_layer_weights:
+            for layer in self.dist_layers:
+                layer.weight = self.transformer.wte.weight
+                layer.LLMC_SKIP_INIT = 1
+        else:
+            for layer in self.dist_layers:
+                layer.LLMC_SKIP_INIT = 1
+        
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
-        # initialize the position embedding at std=0.02 to match the scale of the token embedding.
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, return_logits=True):
+    def forward(self, idx, targets=None, return_logits=True, current_depth=None):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
 
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+        tok_emb = self.transformer.wte(idx)
+        pos_emb = self.transformer.wpe(pos)
         x = tok_emb + pos_emb
 
-        for block in self.transformer.h:
+        fourth_depth = len(self.transformer.h) // 4
+        dist_points = [fourth_depth - 1, 2 * fourth_depth - 1, 3 * fourth_depth - 1, len(self.transformer.h) - 1]
+
+        dist_output_1st = None
+        dist_output_2nd = None
+        dist_output_3rd = None
+        dist_output_4th = None
+
+        for i, block in enumerate(self.transformer.h[:current_depth]):
             x = block(x)
+
+            if i == dist_points[0]:
+                dist_output_1st = x
+            elif i == dist_points[1]:
+                dist_output_2nd = x
+            elif i == dist_points[2]:
+                dist_output_3rd = x
+            elif i == dist_points[3]:
+                dist_output_4th = x
+
         x = rmsnorm(x)
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
+        y_1st = None if dist_output_1st is None else self.dist_layers[0](dist_output_1st)
+        y_2nd = None if dist_output_2nd is None else self.dist_layers[1](dist_output_2nd)
+        y_3rd = None if dist_output_3rd is None else self.dist_layers[2](dist_output_3rd)
+        y_4th = None if dist_output_4th is None else self.dist_layers[3](dist_output_4th)
 
-        # there are performance reasons why not returning logits is prudent, if not needed
+        losses = []
+        for i, y in enumerate([y_1st, y_2nd, y_3rd, y_4th]):
+            if y is not None and i < current_depth // fourth_depth:
+                loss = F.cross_entropy(y.view(-1, y.size(-1)), targets.view(-1), ignore_index=-1)
+                losses.append(loss)
+            else:
+                losses.append(None)
+
         if not return_logits:
-            logits = None
+            y_1st, y_2nd, y_3rd, y_4th = None, None, None, None
 
-        return logits, loss
+        return losses, y_1st, y_2nd, y_3rd, y_4th
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
@@ -207,8 +233,8 @@ class DataLoader:
         self.current_position = 0
         self.tokens = _load_data_shard(self.files[self.current_shard])
 
-    def next_batch(self):
-        B = self.B
+    def next_batch(self, batch_size=None):
+        B = batch_size if batch_size is not None else self.B
         T = self.T
         buf = self.tokens[self.current_position : self.current_position+B*T+1]
         buf = torch.tensor(buf.astype(np.int32), dtype=torch.long)
@@ -223,24 +249,42 @@ class DataLoader:
 # -----------------------------------------------------------------------------
 # int main
 
+def get_layer_depth(batch_num, num_batches, depth):
+    quarter_depth = depth // 4
+    phases = [0.25, 0.5, 0.75, 1.0]
+    weights = [
+        [0.6, 0.2, 0.1, 0.1],
+        [0.4, 0.3, 0.2, 0.1],
+        [0.1, 0.2, 0.3, 0.4],
+        [0.0, 0.1, 0.2, 0.7]  
+    ]
+    # Safeguard against the ratio exactly equalling 1.0
+    phase_index = next((i for i, phase in enumerate(phases) if batch_num / num_batches <= phase), len(phases) - 1)
+    current_weights = weights[phase_index]
+    chosen_depth = np.random.choice(
+        [quarter_depth, 2 * quarter_depth, 3 * quarter_depth, depth],
+        p=current_weights
+    )
+    return chosen_depth
+
 def print0(*args, **kwargs):
     # modified print that only prints from the master process
     # if this is not a distributed run, it's just a print
     print(*args, **kwargs)
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
-            input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            output_dir= None, 
-            model="d12", 
-            batch_size=64, 
-            sequence_length=1024, 
-            num_iterations=12288, 
-            learning_rate=0.0018, 
-            warmup_iters=256, 
-            weight_decay=0.1,
-            val_loss_every=128, 
-            val_max_steps=20
-            ):
+          input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
+          output_dir=None, 
+          model="d12", 
+          batch_size=64, 
+          sequence_length=1024, 
+          num_iterations=12288, 
+          learning_rate=0.0018, 
+          warmup_iters=256, 
+          weight_decay=0.1, 
+          val_loss_every=128, 
+          val_max_steps=20):
+    
     wandb.init(project="gpt2_distill", config={
         "input_bin": input_bin,
         "input_val_bin": input_val_bin,
@@ -277,78 +321,111 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),
         "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),
     }[model]
-    model = GPT(model_config)
+    model = GPT(model_config, shared_dist_layer_weights=True)
     model = model.train().cuda()
     if hasattr(config, "coordinate_descent_tuning"):
         config.coordinate_descent_tuning = True # suggested by @Chillee
     print0("compiling the model...")
     model = torch.compile(model)
 
+    # Define depth and batch size mappings
+    depth = model_config.n_layer
+    batch_size_by_depth = {
+        depth // 4: 465,
+        2 * (depth // 4): 255,
+        3 * (depth // 4): 175,
+        depth: 130
+    }
+
+    lr_by_depth = {
+        depth // 4: 1e-3,
+        2 * (depth // 4): 5e-4,
+        3 * (depth // 4): 3e-4,
+        depth: 1e-4
+    }
+
+    # Initial dynamic depth selection
+    current_depth = get_layer_depth(0, num_iterations, depth)
+    B = batch_size_by_depth[current_depth]
+    base_lr = lr_by_depth[current_depth]
+
     # load tokens
     train_loader = DataLoader(input_bin, B, T)
     val_loader = None
     if input_val_bin:
         val_loader = DataLoader(input_val_bin, B, T)
-    x, y = train_loader.next_batch()
+    x, y = train_loader.next_batch(batch_size=B)
 
     raw_model = model
 
     # init the optimizer
     optimizer = raw_model.configure_optimizers(weight_decay=weight_decay,
-                                               learning_rate=learning_rate, betas=(0.9, 0.95),
+                                               learning_rate=base_lr, betas=(0.9, 0.95),
                                                device_type=device)
 
-    # learning rate decay scheduler
-    def get_lr(it):
+    # learning rate decay scheduler with warmup
+    def get_lr(it, base_lr):
         assert it <= num_iterations
         # 1) linear warmup for warmup_iters steps
         if it < warmup_iters:
-            return learning_rate * (it+1) / warmup_iters
+            return base_lr * (it + 1) / warmup_iters
         # 2) linear decay down to min learning rate
         decay_ratio = (it - warmup_iters) / (num_iterations - warmup_iters)
         assert 0 <= decay_ratio <= 1
-        return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * learning_rate
+        return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * base_lr
 
     run_id = str(uuid.uuid4())
 
     timings = []
+
     for step in range(num_iterations + 1):
         t0 = time.time()
         last_step = (step == num_iterations)
 
-        # once in a while evaluate the validation dataset
         if (val_loss_every > 0 \
             and (step % val_loss_every == 0 or last_step)) \
             and (val_loader is not None):
             model.eval()
             val_loader.reset()
             with torch.no_grad():
-                val_loss = 0.0
+                val_losses = [0.0] * 4
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    _, loss = model(x_val, y_val, return_logits=False)
-                    val_loss += loss.item()
-                val_loss /= val_max_steps
+                    losses, _, _, _, _ = model(x_val, y_val, return_logits=False, current_depth=depth)
+                    for i, loss in enumerate(losses):
+                        if loss is not None:
+                            val_losses[i] += loss.item()
+                val_losses = [loss / val_max_steps for loss in val_losses]
             # log to console and to wandb
-            print0(f"val loss {val_loss}")
-            wandb.log({"val_loss": val_loss}, step=step)
+            print0(f"val losses {val_losses}")
+            val_loss_dict = {f"val_loss_{i+1}": loss for i, loss in enumerate(val_losses)}
+            wandb.log(val_loss_dict, step=step)
 
         if last_step:
             break
 
+        # Dynamically determine depth
+        current_depth = get_layer_depth(step, num_iterations, depth)
+        B = batch_size_by_depth[current_depth]
+        base_lr = lr_by_depth[current_depth]
+
+        # Determine learning rate with warmup and decay
+        lr = get_lr(step, base_lr)
+
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
         # forward pass
+        # forward pass
         with ctx:
-            _, loss = model(x, y, return_logits=False)
+            losses, y_1st, y_2nd, y_3rd, y_4th = model(x, y, return_logits=False, current_depth=current_depth)
         # advance the dataset for the next batch
-        x, y = train_loader.next_batch()
+        x, y = train_loader.next_batch(batch_size=B)
         # backward pass
-        loss.backward()
+        current_loss = losses[-1]
+        current_loss.backward()
         for p in model.parameters():
             p.grad = p.grad / (p.grad.norm() + 1e-6)
-        # determine and set the learning rate for this iteration
-        lr = get_lr(step)
+        # set the learning rate for this iteration
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
@@ -361,19 +438,21 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # time and print
         t1 = time.time()
         # the 0th iteration is often an outlier (much slower) => skip logging it
-        tokens_per_second = B * T / (t1-t0)
-        lossf = loss.item() # keep track of the mean loss
-        print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
+        tokens_per_second = B * T / (t1 - t0)
+        lossf = current_loss.item() # keep track of the mean loss
+        print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1 - t0) * 1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         # log to wandb
-        wandb.log({"train_loss": lossf, "lr": lr, "tokens_per_second": tokens_per_second}, step=step)
+        loss_dict = {f"train_loss_{i+1}": loss.item() if loss is not None else None for i, loss in enumerate(losses)}
+        wandb.log(loss_dict, step=step)
+        wandb.log({"output_layer_loss": lossf, "lr": lr, "tokens_per_second": tokens_per_second}, step=step)
 
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
-            timings.append(t1-t0)
+            timings.append(t1 - t0)
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
-    print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
+    print0(f"final {len(timings)} iters avg: {np.mean(timings) * 1000:.3f}ms")
     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
 
     # -------------------------------------------------------------------------
