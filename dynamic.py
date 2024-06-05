@@ -424,17 +424,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # advance the dataset for the next batch
         x, y = train_loader.next_batch(batch_size=B)
 
-        # Print the losses
-        print0(f"losses {losses}")
-
         # backward pass
         current_loss = losses[-1]
         current_loss.backward()
         log_memory_usage(f"After Backward Pass, Step {step+1}", current_depth, B)
 
         for p in model.parameters():
-            p.grad = p.grad / (p.grad.norm() + 1e-6)
-
+            if p.grad is not None:
+                p.grad = p.grad / (p.grad.norm() + 1e-6)
+                
         # set the learning rate for this iteration
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
