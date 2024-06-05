@@ -13,6 +13,7 @@ import torch.nn.functional as F
 import torch._inductor.config as config
 
 import fire
+import wandb  # Import wandb
 
 with open(sys.argv[0]) as f:
     code = f.read()
@@ -250,6 +251,23 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     torch.cuda.set_device(device)
     print(f"using device: {device}")
 
+    # Initialize wandb
+    wandb.init(project="gpt2_distill", config={
+        "input_bin": input_bin,
+        "input_val_bin": input_val_bin,
+        "output_dir": output_dir,
+        "model": model,
+        "batch_size": batch_size,
+        "sequence_length": sequence_length,
+        "num_iterations": num_iterations,
+        "learning_rate": learning_rate,
+        "warmup_iters": warmup_iters,
+        "weight_decay": weight_decay,
+        "val_loss_every": val_loss_every,
+        "val_max_steps": val_max_steps,
+        "num_layers": num_layers,
+    })
+
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
@@ -318,6 +336,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss /= val_max_steps
             # log to console and to file
             print0(f"val loss {val_loss}")
+            wandb.log({"val_loss": val_loss, "step": step})  # Log validation loss to wandb
             if logfile is not None:
                 with open(logfile, "a") as f:
                     f.write("s:%d tel:%f\n" % (step, val_loss))
@@ -353,6 +372,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
         print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
+        wandb.log({"train_loss": lossf, "step": step})  # Log training loss to wandb
         # log to logile
         if logfile is not None:
             with open(logfile, "a") as f:
