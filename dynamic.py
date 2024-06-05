@@ -242,11 +242,10 @@ class DataLoader:
 
 def get_layer_depth(batch_num, num_batches, depth):
     quarter_depth = depth // 4
-    half_depth = depth // 2
     phases = [0.5, 1.0]
     weights = [
         [0.7, 0.3],
-        [0.4, 0.6]  
+        [0.3, 0.7]  
     ]
     # Safeguard against the ratio exactly equalling 1.0
     phase_index = next((i for i, phase in enumerate(phases) if batch_num / num_batches <= phase), len(phases) - 1)
@@ -323,8 +322,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Define depth and batch size mappings
     depth = model_config.n_layer
     batch_size_by_depth = {
-        depth // 4: 50,
-        depth: 20
+        depth // 4: 20,
+        depth: 10
     }
 
     lr_by_depth = {
