@@ -11,6 +11,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torch._inductor.config as config
+from torch.utils.checkpoint import checkpoint
 
 import fire
 import wandb
@@ -69,7 +70,6 @@ class MLP(nn.Module):
         return x
 
 class Block(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.attn = CausalSelfAttention(config)
@@ -77,6 +77,10 @@ class Block(nn.Module):
         self.attn_scale = (1 / math.sqrt(2 * config.n_layer))
 
     def forward(self, x):
+        x = checkpoint(self._forward_block, x)
+        return x
+
+    def _forward_block(self, x):
         x = x + self.attn_scale * self.attn(rmsnorm(x))
         x = x + self.mlp(rmsnorm(x))
         return x
@@ -353,6 +357,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     optimizer = raw_model.configure_optimizers(weight_decay=weight_decay,
                                                learning_rate=base_lr, betas=(0.9, 0.95),
                                                device_type=device)
+    scaler = torch.cuda.amp.GradScaler()
 
     # learning rate decay scheduler with warmup
     def get_lr(it, base_lr):
@@ -418,7 +423,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         total_instances_seen += B
 
         # backward pass
-        loss.backward()
+        scaler.scale(loss).backward()
         log_memory_usage(f"After Backward Pass, Step {step+1}", current_depth, B)
 
         for p in model.parameters():
@@ -430,7 +435,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             param_group['lr'] = lr
 
         # step the optimizer
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         optimizer.zero_grad(set_to_none=True)
         log_memory_usage(f"After Optimizer Step, Step {step+1}", current_depth, B)
         # --------------- TRAINING SECTION END -------------------
@@ -444,7 +450,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         lossf = loss.item() # keep track of the mean loss
         print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1 - t0) * 1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         # log to wandb
-        wandb.log({"train_loss": lossf, "lr": lr, "tokens_per_second": tokens_per_second, "total_instances_seen": total_instances_seen}, step=step)
+        wandb.log({"train_loss": lossf, "lr": lr, "tokens_per_second": tokens_per_second, "instances_seen": total_instances_seen}, step=step)
 
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
