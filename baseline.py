@@ -146,6 +146,11 @@ class GPT(nn.Module):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
         return optimizer
 
+    def print_network_depth(self):
+        depth = len(self.transformer.h)
+        print(f"Network depth (number of layers): {depth}")
+        return depth
+
 # -----------------------------------------------------------------------------
 # Our own simple Data Loader
 
@@ -240,7 +245,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             weight_decay=0.1,
             val_loss_every=128, 
             val_max_steps=20,
-            num_layers=12  # Add num_layers argument
+            num_layers=3  # Add num_layers argument
             ):
     print0(f"Running pytorch {torch.version.__version__}")
 
@@ -281,6 +286,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         config.coordinate_descent_tuning = True # suggested by @Chillee
     print0("compiling the model...")
     model = torch.compile(model)
+
+    # Print and verify network depth
+    depth = model.print_network_depth()
+    assert depth == num_layers, f"Expected {num_layers} layers, but found {depth} layers in the network"
 
     # load tokens
     train_loader = DataLoader(input_bin, B, T)
