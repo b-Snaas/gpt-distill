@@ -285,11 +285,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     if hasattr(config, "coordinate_descent_tuning"):
         config.coordinate_descent_tuning = True # suggested by @Chillee
     print0("compiling the model...")
-    model = torch.compile(model)
 
     # Print and verify network depth
     depth = model.print_network_depth()
     assert depth == num_layers, f"Expected {num_layers} layers, but found {depth} layers in the network"
+
+    model = torch.compile(model)
 
     # load tokens
     train_loader = DataLoader(input_bin, B, T)
