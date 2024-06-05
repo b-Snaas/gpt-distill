@@ -129,34 +129,38 @@ class GPT(nn.Module):
         x = tok_emb + pos_emb
 
         quarter_depth = len(self.transformer.h) // 4
-        dist_points = [quarter_depth - 1, len(self.transformer.h) - 1]
+        dist_output = None
 
-        dist_output_1st = None
-        dist_output_2nd = None
-
+        # Process up to the current depth
         for i, block in enumerate(self.transformer.h[:current_depth]):
             x = block(x)
 
-            if i == dist_points[0]:
-                dist_output_1st = x
-            elif i == dist_points[1]:
-                dist_output_2nd = x
+            if current_depth == quarter_depth and i == quarter_depth - 1:
+                dist_output = x
+                break
+            elif current_depth == len(self.transformer.h) and i == len(self.transformer.h) - 1:
+                dist_output = x
+                break
 
         x = rmsnorm(x)
 
-        y_1st = None if dist_output_1st is None else self.dist_layers[0](dist_output_1st)
-        y_2nd = None if dist_output_2nd is None else self.dist_layers[1](dist_output_2nd)
+        # Determine which distillation layer to use based on current depth
+        if current_depth == quarter_depth:
+            y = self.dist_layers[0](dist_output)
+        elif current_depth == len(self.transformer.h):
+            y = self.dist_layers[1](dist_output)
+        else:
+            y = None
 
-        losses = []
-        for i, y in enumerate([y_1st, y_2nd]):
-            if y is not None and i < current_depth // quarter_depth:
-                loss = F.cross_entropy(y.view(-1, y.size(-1)), targets.view(-1), ignore_index=-1)
-                losses.append(loss)
+        loss = None
+
+        if y is not None and targets is not None:
+            loss = F.cross_entropy(y.view(-1, y.size(-1)), targets.view(-1), ignore_index=-1)
 
         if not return_logits:
-            y_1st, y_2nd = None, None
+            y = None
 
-        return losses, y_1st, y_2nd
+        return loss, y
 
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
@@ -266,17 +270,6 @@ def log_memory_usage(event_name, current_depth=None, batch_size=None):
     max_allocated_memory = torch.cuda.max_memory_allocated() / (1024 ** 2) # Convert bytes to MB
     print0(f"{event_name}: Allocated Memory: {allocated_memory:.2f} MB, Max Allocated Memory: {max_allocated_memory:.2f} MB, Depth: {current_depth}, Batch Size: {batch_size}")
 
-def check_gradients(model):
-    total_grad_size = 0
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            grad_size = param.grad.numel() * param.grad.element_size()
-            total_grad_size += grad_size
-            print(f"Parameter: {name}, Gradient Size: {grad_size} bytes")
-        else:
-            print(f"Parameter: {name}, Gradient: None")
-    
-    print(f"Total Gradient Size: {total_grad_size} bytes ({total_grad_size / 1024 / 1024:.2f} MB)")
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
           input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
@@ -334,8 +327,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Define depth and batch size mappings
     depth = model_config.n_layer
     batch_size_by_depth = {
-        depth // 4: 5,
-        depth: 5
+        depth // 4: 50,
+        depth: 20
     }
 
     lr_by_depth = {
@@ -389,18 +382,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 model.eval()
                 val_loader.reset()
                 with torch.no_grad():
-                    val_losses = [0.0] * 2
+                    val_loss = 0.0
                     for _ in range(val_max_steps):
                         x_val, y_val = val_loader.next_batch()
-                        losses, _, _ = model(x_val, y_val, return_logits=False, current_depth=depth)
-                        for i, loss in enumerate(losses):
-                            if loss is not None:
-                                val_losses[i] += loss.item()
-                    val_losses = [loss / val_max_steps for loss in val_losses]
+                        loss, _ = model(x_val, y_val, return_logits=False, current_depth=depth)
+                        val_loss += loss.item()
+                    val_loss /= val_max_steps
                 # log to console and to wandb
-                print0(f"val losses {val_losses}")
-                val_loss_dict = {f"val_loss_{i+1}": loss for i, loss in enumerate(val_losses)}
-                wandb.log(val_loss_dict, step=step)
+                print0(f"val loss {val_loss}")
+                wandb.log({"val_loss": val_loss}, step=step)
 
         if last_step:
             break
@@ -418,19 +408,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # forward pass
         log_memory_usage(f"Before Forward Pass, Step {step+1}", current_depth, B)
         with ctx:
-            losses, y_1st, y_2nd = model(x, y, return_logits=False, current_depth=current_depth)
+            loss, _ = model(x, y, return_logits=False, current_depth=current_depth)
         log_memory_usage(f"After Forward Pass, Step {step+1}", current_depth, B)
 
         # advance the dataset for the next batch
         x, y = train_loader.next_batch(batch_size=B)
 
         # backward pass
-        current_loss = losses[-1]
-        current_loss.backward()
+        loss.backward()
         log_memory_usage(f"After Backward Pass, Step {step+1}", current_depth, B)
-
-        # In the training loop, after the backward pass
-        check_gradients(model)
 
         for p in model.parameters():
             if p.grad is not None:
@@ -452,12 +438,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         t1 = time.time()
         # the 0th iteration is often an outlier (much slower) => skip logging it
         tokens_per_second = B * T / (t1 - t0)
-        lossf = current_loss.item() # keep track of the mean loss
+        lossf = loss.item() # keep track of the mean loss
         print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1 - t0) * 1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         # log to wandb
-        loss_dict = {f"train_loss_{i+1}": loss.item() if loss is not None else None for i, loss in enumerate(losses)}
-        wandb.log(loss_dict, step=step)
-        wandb.log({"output_layer_loss": lossf, "lr": lr, "tokens_per_second": tokens_per_second}, step=step)
+        wandb.log({"train_loss": lossf, "lr": lr, "tokens_per_second": tokens_per_second}, step=step)
 
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
