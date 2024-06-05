@@ -332,10 +332,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Define depth and batch size mappings
     depth = model_config.n_layer
     batch_size_by_depth = {
-        depth // 4: 12,
-        2 * (depth // 4): 10,
-        3 * (depth // 4): 8,
-        depth: 6
+        depth // 4: 20,
+        2 * (depth // 4): 16,
+        3 * (depth // 4): 14,
+        depth: 12
     }
 
     lr_by_depth = {
@@ -349,6 +349,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     current_depth = get_layer_depth(0, num_iterations, depth)
     B = batch_size_by_depth[current_depth]
     base_lr = lr_by_depth[current_depth]
+    
+    previous_depth = current_depth
+    depth_counter = 0
 
     # load tokens
     train_loader = DataLoader(input_bin, B, T)
@@ -405,8 +408,17 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         if last_step:
             break
 
-        # Dynamically determine depth
-        current_depth = get_layer_depth(step, num_iterations, depth)
+        # Dynamically determine depth every 10 batches
+        if depth_counter == 10:
+            current_depth = get_layer_depth(step, num_iterations, depth)
+            depth_counter = 0
+        else:
+            depth_counter += 1
+
+        if current_depth != previous_depth:
+            torch.cuda.empty_cache()
+            previous_depth = current_depth
+
         B = batch_size_by_depth[current_depth]
         base_lr = lr_by_depth[current_depth]
 
