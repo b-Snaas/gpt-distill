@@ -272,17 +272,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             val_max_steps=20,
             num_layers=3  # Add num_layers argument
             ):
-    print0(f"Running pytorch {torch.version.__version__}")
-    log_system_info()  # Log system info at the start
-
-    # args error checking and convenience variables
-    B, T = batch_size, sequence_length
-    assert 1 <= T <= 1024
-
-    assert torch.cuda.is_available(), "CUDA is required"
-    device = 'cuda:0'
-    torch.cuda.set_device(device)
-    print(f"using device: {device}")
 
     # Initialize wandb
     wandb.init(project="gpt2_distill", config={
@@ -301,6 +290,18 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "num_layers": num_layers,
     })
 
+    print0(f"Running pytorch {torch.version.__version__}")
+    log_system_info()  # Log system info at the start
+
+    # args error checking and convenience variables
+    B, T = batch_size, sequence_length
+    assert 1 <= T <= 1024
+
+    assert torch.cuda.is_available(), "CUDA is required"
+    device = 'cuda:0'
+    torch.cuda.set_device(device)
+    print(f"using device: {device}")
+
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
@@ -317,6 +318,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     assert depth == num_layers, f"Expected {num_layers} layers, but found {depth} layers in the network"
 
     model = torch.compile(model)
+
+    print0("Logging system info after compiling model:")
+    log_system_info()
 
     # load tokens
     train_loader = DataLoader(input_bin, B, T)
