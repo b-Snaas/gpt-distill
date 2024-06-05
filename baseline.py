@@ -359,6 +359,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             pass
 
     timings = []
+    instances_seen = 0  # Initialize counter for instances seen
     for step in range(num_iterations + 1):
         t0 = time.time()
         last_step = (step == num_iterations)
@@ -398,6 +399,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             _, loss = model(x, y, return_logits=False)
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
+        # Increment the counter for instances seen
+        instances_seen += x.size(0)
         # backward pass
         loss.backward()
         for p in model.parameters():
@@ -419,7 +422,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
         # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
-        wandb.log({"train_loss": lossf, "step": step})  # Log training loss to wandb
+        wandb.log({"train_loss": lossf, "step": step, "instances_seen": instances_seen})  # Log training loss and instances seen to wandb
         # log to logile
         if logfile is not None:
             with open(logfile, "a") as f:

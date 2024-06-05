@@ -270,7 +270,6 @@ def log_memory_usage(event_name, current_depth=None, batch_size=None):
     max_allocated_memory = torch.cuda.max_memory_allocated() / (1024 ** 2) # Convert bytes to MB
     print0(f"{event_name}: Allocated Memory: {allocated_memory:.2f} MB, Max Allocated Memory: {max_allocated_memory:.2f} MB, Depth: {current_depth}, Batch Size: {batch_size}")
 
-
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
           input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
           output_dir=None, 
@@ -369,6 +368,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     run_id = str(uuid.uuid4())
 
     timings = []
+    total_instances_seen = 0  # Initialize the variable to track total instances seen
 
     for step in range(num_iterations + 1):
         t0 = time.time()
@@ -414,6 +414,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # advance the dataset for the next batch
         x, y = train_loader.next_batch(batch_size=B)
 
+        # Update the total instances seen
+        total_instances_seen += B
+
         # backward pass
         loss.backward()
         log_memory_usage(f"After Backward Pass, Step {step+1}", current_depth, B)
@@ -441,7 +444,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         lossf = loss.item() # keep track of the mean loss
         print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1 - t0) * 1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         # log to wandb
-        wandb.log({"train_loss": lossf, "lr": lr, "tokens_per_second": tokens_per_second}, step=step)
+        wandb.log({"train_loss": lossf, "lr": lr, "tokens_per_second": tokens_per_second, "total_instances_seen": total_instances_seen}, step=step)
 
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
