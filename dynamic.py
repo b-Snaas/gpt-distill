@@ -160,13 +160,12 @@ class GPT(nn.Module):
             if y is not None and i < current_depth // fourth_depth:
                 loss = F.cross_entropy(y.view(-1, y.size(-1)), targets.view(-1), ignore_index=-1)
                 losses.append(loss)
-            else:
-                losses.append(None)
 
         if not return_logits:
             y_1st, y_2nd, y_3rd, y_4th = None, None, None, None
 
         return losses, y_1st, y_2nd, y_3rd, y_4th
+
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
@@ -333,10 +332,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Define depth and batch size mappings
     depth = model_config.n_layer
     batch_size_by_depth = {
-        depth // 4: 60,
-        2 * (depth // 4): 40,
-        3 * (depth // 4): 28,
-        depth: 21
+        depth // 4: 10,
+        2 * (depth // 4): 10,
+        3 * (depth // 4): 10,
+        depth: 10
     }
 
     lr_by_depth = {
@@ -424,6 +423,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         # advance the dataset for the next batch
         x, y = train_loader.next_batch(batch_size=B)
+
+        # Print the losses
+        print0(f"losses {losses}")
 
         # backward pass
         current_loss = losses[-1]
