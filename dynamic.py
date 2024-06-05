@@ -103,7 +103,7 @@ class GPT(nn.Module):
             wpe = nn.Embedding(config.block_size, config.n_embd),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
         ))
-        self.dist_layers = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size, bias=False) for _ in range(4)])
+        self.dist_layers = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size, bias=False) for _ in range(2)])
         
         if self.shared_dist_layer_weights:
             for layer in self.dist_layers:
@@ -128,13 +128,11 @@ class GPT(nn.Module):
         pos_emb = self.transformer.wpe(pos)
         x = tok_emb + pos_emb
 
-        fourth_depth = len(self.transformer.h) // 4
-        dist_points = [fourth_depth - 1, 2 * fourth_depth - 1, 3 * fourth_depth - 1, len(self.transformer.h) - 1]
+        quarter_depth = len(self.transformer.h) // 4
+        dist_points = [quarter_depth - 1, len(self.transformer.h) - 1]
 
         dist_output_1st = None
         dist_output_2nd = None
-        dist_output_3rd = None
-        dist_output_4th = None
 
         for i, block in enumerate(self.transformer.h[:current_depth]):
             x = block(x)
@@ -143,28 +141,22 @@ class GPT(nn.Module):
                 dist_output_1st = x
             elif i == dist_points[1]:
                 dist_output_2nd = x
-            elif i == dist_points[2]:
-                dist_output_3rd = x
-            elif i == dist_points[3]:
-                dist_output_4th = x
 
         x = rmsnorm(x)
 
         y_1st = None if dist_output_1st is None else self.dist_layers[0](dist_output_1st)
         y_2nd = None if dist_output_2nd is None else self.dist_layers[1](dist_output_2nd)
-        y_3rd = None if dist_output_3rd is None else self.dist_layers[2](dist_output_3rd)
-        y_4th = None if dist_output_4th is None else self.dist_layers[3](dist_output_4th)
 
         losses = []
-        for i, y in enumerate([y_1st, y_2nd, y_3rd, y_4th]):
-            if y is not None and i < current_depth // fourth_depth:
+        for i, y in enumerate([y_1st, y_2nd]):
+            if y is not None and i < current_depth // quarter_depth:
                 loss = F.cross_entropy(y.view(-1, y.size(-1)), targets.view(-1), ignore_index=-1)
                 losses.append(loss)
 
         if not return_logits:
-            y_1st, y_2nd, y_3rd, y_4th = None, None, None, None
+            y_1st, y_2nd = None, None
 
-        return losses, y_1st, y_2nd, y_3rd, y_4th
+        return losses, y_1st, y_2nd
 
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
@@ -250,18 +242,17 @@ class DataLoader:
 
 def get_layer_depth(batch_num, num_batches, depth):
     quarter_depth = depth // 4
-    phases = [0.25, 0.5, 0.75, 1.0]
+    half_depth = depth // 2
+    phases = [0.5, 1.0]
     weights = [
-        [0.6, 0.2, 0.1, 0.1],
-        [0.4, 0.3, 0.2, 0.1],
-        [0.1, 0.2, 0.3, 0.4],
-        [0.0, 0.1, 0.2, 0.7]  
+        [0.7, 0.3],
+        [0.4, 0.6]  
     ]
     # Safeguard against the ratio exactly equalling 1.0
     phase_index = next((i for i, phase in enumerate(phases) if batch_num / num_batches <= phase), len(phases) - 1)
     current_weights = weights[phase_index]
     chosen_depth = np.random.choice(
-        [quarter_depth, 2 * quarter_depth, 3 * quarter_depth, depth],
+        [quarter_depth, depth],
         p=current_weights
     )
     return chosen_depth
@@ -332,16 +323,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Define depth and batch size mappings
     depth = model_config.n_layer
     batch_size_by_depth = {
-        depth // 4: 14,
-        2 * (depth // 4): 12,
-        3 * (depth // 4): 10,
-        depth: 8
+        depth // 4: 50,
+        depth: 20
     }
 
     lr_by_depth = {
         depth // 4: 0.0005,
-        2 * (depth // 4): 0.00035,
-        3 * (depth // 4): 0.00025,
         depth: 0.00018
     }
 
@@ -349,9 +336,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     current_depth = get_layer_depth(0, num_iterations, depth)
     B = batch_size_by_depth[current_depth]
     base_lr = lr_by_depth[current_depth]
-    
-    previous_depth = current_depth
-    depth_counter = 0
 
     # load tokens
     train_loader = DataLoader(input_bin, B, T)
@@ -392,10 +376,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             model.eval()
             val_loader.reset()
             with torch.no_grad():
-                val_losses = [0.0] * 4
+                val_losses = [0.0] * 2
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    losses, _, _, _, _ = model(x_val, y_val, return_logits=False, current_depth=depth)
+                    losses, _, _ = model(x_val, y_val, return_logits=False, current_depth=depth)
                     for i, loss in enumerate(losses):
                         if loss is not None:
                             val_losses[i] += loss.item()
@@ -408,17 +392,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         if last_step:
             break
 
-        # Dynamically determine depth every 10 batches
-        if depth_counter == 10:
-            current_depth = get_layer_depth(step, num_iterations, depth)
-            depth_counter = 0
-        else:
-            depth_counter += 1
-
-        if current_depth != previous_depth:
-            torch.cuda.empty_cache()
-            previous_depth = current_depth
-
+        # Dynamically determine depth
+        current_depth = get_layer_depth(step, num_iterations, depth)
         B = batch_size_by_depth[current_depth]
         base_lr = lr_by_depth[current_depth]
 
@@ -430,7 +405,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # forward pass
         log_memory_usage(f"Before Forward Pass, Step {step+1}", current_depth, B)
         with ctx:
-            losses, y_1st, y_2nd, y_3rd, y_4th = model(x, y, return_logits=False, current_depth=current_depth)
+            losses, y_1st, y_2nd = model(x, y, return_logits=False, current_depth=current_depth)
         log_memory_usage(f"After Forward Pass, Step {step+1}", current_depth, B)
 
         # advance the dataset for the next batch
