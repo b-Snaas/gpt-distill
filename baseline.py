@@ -418,7 +418,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # the 0th iteration is often an outlier (much slower) => skip logging it
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
-        print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
+        # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         wandb.log({"train_loss": lossf, "step": step})  # Log training loss to wandb
         # log to logile
         if logfile is not None:
