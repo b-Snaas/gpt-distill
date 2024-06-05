@@ -14,6 +14,10 @@ import torch._inductor.config as config
 
 import fire
 import wandb  # Import wandb
+import platform
+import psutil
+import GPUtil
+import subprocess
 
 torch.set_float32_matmul_precision('high')
 
@@ -233,6 +237,30 @@ def print0(*args, **kwargs):
     # if this is not a distributed run, it's just a print
     print(*args, **kwargs)
 
+def get_gpu_memory_info():
+    gpus = GPUtil.getGPUs()
+    gpu_info = {}
+    for gpu in gpus:
+        gpu_info[gpu.id] = {
+            'name': gpu.name,
+            'memory_total_MB': gpu.memoryTotal,
+            'memory_free_MB': gpu.memoryFree,
+            'memory_used_MB': gpu.memoryUsed,
+            'load_percent': gpu.load * 100,
+            'temperature_C': gpu.temperature
+        }
+    return gpu_info
+
+def log_system_info():
+    gpu_info = get_gpu_memory_info()
+    for gpu_id, info in gpu_info.items():
+        print0(f"GPU {gpu_id}: {info['name']}")
+        print0(f"  Total Memory: {info['memory_total_MB']} MB")
+        print0(f"  Free Memory: {info['memory_free_MB']} MB")
+        print0(f"  Used Memory: {info['memory_used_MB']} MB")
+        print0(f"  GPU Load: {info['load_percent']}%")
+        print0(f"  Temperature: {info['temperature_C']}°C")
+
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             output_dir= "pylog124M", 
@@ -248,6 +276,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             num_layers=3  # Add num_layers argument
             ):
     print0(f"Running pytorch {torch.version.__version__}")
+    log_system_info()  # Log system info at the start
 
     # args error checking and convenience variables
     B, T = batch_size, sequence_length
@@ -332,6 +361,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     for step in range(num_iterations + 1):
         t0 = time.time()
         last_step = (step == num_iterations)
+
+        # Log system info after 100 batches
+        if step == 100:
+            print0("Logging system info after 100 batches:")
+            log_system_info()
 
         # once in a while evaluate the validation dataset
         if (val_loss_every > 0 \
