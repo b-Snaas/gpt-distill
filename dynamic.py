@@ -266,6 +266,18 @@ def log_memory_usage(event_name, current_depth=None, batch_size=None):
     max_allocated_memory = torch.cuda.max_memory_allocated() / (1024 ** 2) # Convert bytes to MB
     print0(f"{event_name}: Allocated Memory: {allocated_memory:.2f} MB, Max Allocated Memory: {max_allocated_memory:.2f} MB, Depth: {current_depth}, Batch Size: {batch_size}")
 
+def check_gradients(model):
+    total_grad_size = 0
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grad_size = param.grad.numel() * param.grad.element_size()
+            total_grad_size += grad_size
+            print(f"Parameter: {name}, Gradient Size: {grad_size} bytes")
+        else:
+            print(f"Parameter: {name}, Gradient: None")
+    
+    print(f"Total Gradient Size: {total_grad_size} bytes ({total_grad_size / 1024 / 1024:.2f} MB)")
+
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
           input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
           output_dir=None, 
@@ -322,8 +334,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Define depth and batch size mappings
     depth = model_config.n_layer
     batch_size_by_depth = {
-        depth // 4: 20,
-        depth: 20
+        depth // 4: 5,
+        depth: 5
     }
 
     lr_by_depth = {
@@ -369,24 +381,26 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         t0 = time.time()
         last_step = (step == num_iterations)
 
-        if (val_loss_every > 0 \
-            and (step % val_loss_every == 0 or last_step)) \
-            and (val_loader is not None):
-            model.eval()
-            val_loader.reset()
-            with torch.no_grad():
-                val_losses = [0.0] * 2
-                for _ in range(val_max_steps):
-                    x_val, y_val = val_loader.next_batch()
-                    losses, _, _ = model(x_val, y_val, return_logits=False, current_depth=depth)
-                    for i, loss in enumerate(losses):
-                        if loss is not None:
-                            val_losses[i] += loss.item()
-                val_losses = [loss / val_max_steps for loss in val_losses]
-            # log to console and to wandb
-            print0(f"val losses {val_losses}")
-            val_loss_dict = {f"val_loss_{i+1}": loss for i, loss in enumerate(val_losses)}
-            wandb.log(val_loss_dict, step=step)
+        with torch.no_grad():
+
+            if (val_loss_every > 0 \
+                and (step % val_loss_every == 0 or last_step)) \
+                and (val_loader is not None):
+                model.eval()
+                val_loader.reset()
+                with torch.no_grad():
+                    val_losses = [0.0] * 2
+                    for _ in range(val_max_steps):
+                        x_val, y_val = val_loader.next_batch()
+                        losses, _, _ = model(x_val, y_val, return_logits=False, current_depth=depth)
+                        for i, loss in enumerate(losses):
+                            if loss is not None:
+                                val_losses[i] += loss.item()
+                    val_losses = [loss / val_max_steps for loss in val_losses]
+                # log to console and to wandb
+                print0(f"val losses {val_losses}")
+                val_loss_dict = {f"val_loss_{i+1}": loss for i, loss in enumerate(val_losses)}
+                wandb.log(val_loss_dict, step=step)
 
         if last_step:
             break
@@ -414,6 +428,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         current_loss = losses[-1]
         current_loss.backward()
         log_memory_usage(f"After Backward Pass, Step {step+1}", current_depth, B)
+
+        # In the training loop, after the backward pass
+        check_gradients(model)
 
         for p in model.parameters():
             if p.grad is not None:
