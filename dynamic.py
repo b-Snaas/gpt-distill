@@ -323,7 +323,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     depth = model_config.n_layer
     batch_size_by_depth = {
         depth // 4: 20,
-        depth: 10
+        depth: 20
     }
 
     lr_by_depth = {
