@@ -335,8 +335,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     }
 
     lr_by_depth = {
-        depth // 4: 0.000009,
-        depth: 0.000009
+        depth // 4: 0.00009,
+        depth: 0.00009
     }
 
     # Initial dynamic depth selection
