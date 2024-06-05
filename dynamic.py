@@ -332,10 +332,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Define depth and batch size mappings
     depth = model_config.n_layer
     batch_size_by_depth = {
-        depth // 4: 10,
+        depth // 4: 12,
         2 * (depth // 4): 10,
-        3 * (depth // 4): 10,
-        depth: 10
+        3 * (depth // 4): 8,
+        depth: 6
     }
 
     lr_by_depth = {
@@ -432,7 +432,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         for p in model.parameters():
             if p.grad is not None:
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
-                
+
         # set the learning rate for this iteration
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
