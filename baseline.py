@@ -346,15 +346,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     run_id = str(uuid.uuid4())
 
-    # create the logging directory if it does not exist
-    logfile = None
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-        logfile = os.path.join(output_dir, "%s.log" % run_id)
-        # create the log file "main.log" inside it, and wipe it clean
-        with open(logfile, "w") as f:
-            pass
-
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
     for step in range(num_iterations + 1):
