@@ -258,6 +258,10 @@ def log_system_info():
         print0(f"  GPU Load: {info['load_percent']}%")
         print0(f"  Temperature: {info['temperature_C']}°C")
 
+def save_model(model, path):
+    torch.save(model.state_dict(), path)
+    print(f"Model saved to {path}")
+
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             output_dir= "pylog124M", 
@@ -306,7 +310,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "d24": GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024),
         "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),
         "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),
-    }
+    }[model]
     model = GPT(model_config)
     model = model.train().cuda()
     if hasattr(config, "coordinate_descent_tuning"):
@@ -429,6 +433,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = timings[-20:]
     print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
+
+    # Save the model at the end of training
+    if output_dir:
+        save_path = os.path.join(output_dir, "trained_model.pth")
+        save_model(model, save_path)
 
 if __name__ == "__main__":
     fire.Fire(train)
