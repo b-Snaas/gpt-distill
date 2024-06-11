@@ -259,6 +259,8 @@ def log_system_info():
         print0(f"  Temperature: {info['temperature_C']}°C")
 
 def save_model(model, path):
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(model.state_dict(), path)
     print(f"Model saved to {path}")
 
