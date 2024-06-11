@@ -361,11 +361,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         t0 = time.time()
         last_step = (step == num_iterations)
 
-        # Log system info after 100 batches
-        if step == 100:
-            print0("Logging system info after 100 batches:")
-            log_system_info()
-
         # once in a while evaluate the validation dataset
         if (val_loss_every > 0 \
             and (step % val_loss_every == 0 or last_step)) \
@@ -382,9 +377,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             # log to console and to file
             print0(f"val loss {val_loss}")
             wandb.log({"val_loss": val_loss, "step": step})
-            if logfile is not None:
-                with open(logfile, "a") as f:
-                    f.write("s:%d tel:%f\n" % (step, val_loss))
 
         if last_step:
             break
@@ -420,10 +412,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         lossf = loss.item() # keep track of the mean loss
         # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         wandb.log({"train_loss": lossf, "step": step, "instances_seen": instances_seen})  # Log training loss and instances seen to wandb
-        # log to logile
-        if logfile is not None:
-            with open(logfile, "a") as f:
-                f.write("s:%d trl:%f\n" % (step, lossf))
 
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
