@@ -264,7 +264,7 @@ def save_model(model, path):
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            output_dir= "pylog124M", 
+            output_dir= "model", 
             model="d12", 
             batch_size=64, 
             sequence_length=1024, 
@@ -436,7 +436,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # Save the model at the end of training
     if output_dir:
-        save_path = os.path.join(output_dir, "trained_model.pth")
+        save_path = os.path.join(output_dir, "teacher_model.pt")
         save_model(model, save_path)
 
 if __name__ == "__main__":
