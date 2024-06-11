@@ -270,7 +270,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             weight_decay=0.1,
             val_loss_every=128, 
             val_max_steps=20,
-            num_layers=3  # Add num_layers argument
             ):
 
     # Initialize wandb
@@ -287,11 +286,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "weight_decay": weight_decay,
         "val_loss_every": val_loss_every,
         "val_max_steps": val_max_steps,
-        "num_layers": num_layers,
     })
-
-    print0(f"Running pytorch {torch.version.__version__}")
-    log_system_info()  # Log system info at the start
 
     # args error checking and convenience variables
     B, T = batch_size, sequence_length
@@ -305,22 +300,20 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
-    # init the model from scratch
-    model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=num_layers, n_head=12, n_embd=768)
+     # init the model from scratch
+    model_config = {
+        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=12, n_head=12, n_embd=768),
+        "d24": GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024),
+        "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),
+        "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),
+    }
     model = GPT(model_config)
     model = model.train().cuda()
     if hasattr(config, "coordinate_descent_tuning"):
         config.coordinate_descent_tuning = True # suggested by @Chillee
     print0("compiling the model...")
 
-    # Print and verify network depth
-    depth = model.print_network_depth()
-    assert depth == num_layers, f"Expected {num_layers} layers, but found {depth} layers in the network"
-
     model = torch.compile(model)
-
-    print0("Logging system info after compiling model:")
-    log_system_info()
 
     # load tokens
     train_loader = DataLoader(input_bin, B, T)
@@ -384,7 +377,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss /= val_max_steps
             # log to console and to file
             print0(f"val loss {val_loss}")
-            wandb.log({"val_loss": val_loss, "step": step})  # Log validation loss to wandb
+            wandb.log({"val_loss": val_loss, "step": step})
             if logfile is not None:
                 with open(logfile, "a") as f:
                     f.write("s:%d tel:%f\n" % (step, val_loss))
@@ -436,12 +429,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = timings[-20:]
     print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
-
-    # -------------------------------------------------------------------------
-
-    log = dict(model=raw_model.state_dict(), code=code, args=locals())
-    os.makedirs('logs', exist_ok=True)
-    torch.save(log, 'logs/%s.pt' % run_id)
 
 if __name__ == "__main__":
     fire.Fire(train)
