@@ -263,7 +263,6 @@ def save_model(model, path):
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            output_dir= "model", 
             model="d12", 
             batch_size=64, 
             sequence_length=1024, 
@@ -282,7 +281,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     wandb.init(project="gpt2_distill", config={
         "input_bin": input_bin,
         "input_val_bin": input_val_bin,
-        "output_dir": output_dir,
         "model": model,
         "batch_size": batch_size,
         "sequence_length": sequence_length,
@@ -438,10 +436,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
 
-    # Save the model at the end of training
-    if output_dir:
-        save_path = os.path.join(output_dir, "teacher_model.pt")
-        save_model(model, save_path)
 
 if __name__ == "__main__":
     fire.Fire(train)
