@@ -154,7 +154,7 @@ class DataLoader:
             self.advance()
         return x.cuda(), y.cuda()
 
-def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=64, sequence_length=1024, val_max_steps=20):
+def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=10, sequence_length=1024, val_max_steps=20):
     # Initialize wandb
     wandb.init(project="gpt2_evaluation", config={
         "pre_trained_model_path": pre_trained_model_path,
