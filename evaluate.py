@@ -4,6 +4,7 @@ import glob
 from torch import nn
 import torch.nn.functional as F
 from dataclasses import dataclass
+import wandb
 
 @dataclass
 class GPTConfig:
@@ -154,6 +155,15 @@ class DataLoader:
         return x.cuda(), y.cuda()
 
 def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=64, sequence_length=1024, val_max_steps=20):
+    # Initialize wandb
+    wandb.init(project="gpt2_evaluation", config={
+        "pre_trained_model_path": pre_trained_model_path,
+        "val_data_pattern": val_data_pattern,
+        "batch_size": batch_size,
+        "sequence_length": sequence_length,
+        "val_max_steps": val_max_steps,
+    })
+
     # Load the pre-trained model
     model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=12, n_head=12, n_embd=768)
     model = GPT(model_config)
@@ -176,6 +186,7 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=64, sequ
         val_loss /= val_max_steps
 
     print(f"Validation loss: {val_loss}")
+    wandb.log({"validation_loss": val_loss})
 
 if __name__ == "__main__":
     pre_trained_model_path = "./model/teacher_model.pt"
