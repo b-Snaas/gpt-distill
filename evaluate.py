@@ -1,16 +1,10 @@
-import os
-import sys
-import uuid
-import math
-import glob
-from dataclasses import dataclass
-import time
-
-import numpy as np
 import torch
+import numpy as np
+import glob
+import os
 from torch import nn
 import torch.nn.functional as F
-import torch._inductor.config as config
+from dataclasses import dataclass
 import wandb
 
 @dataclass
@@ -170,6 +164,19 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=10, sequ
         "sequence_length": sequence_length,
         "val_max_steps": val_max_steps,
     })
+
+    # Debugging print statements
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Checking existence of pre-trained model path: {pre_trained_model_path}")
+    print(f"Checking existence of validation data pattern: {val_data_pattern}")
+    
+    if not os.path.exists(pre_trained_model_path):
+        print(f"Pre-trained model path does not exist: {pre_trained_model_path}")
+        return
+    
+    if not glob.glob(val_data_pattern):
+        print(f"No files match the validation data pattern: {val_data_pattern}")
+        return
 
     # Load the pre-trained model
     model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=12, n_head=12, n_embd=768)
