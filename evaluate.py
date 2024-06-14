@@ -196,6 +196,6 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=10, sequ
     wandb.log({"validation_loss": val_loss})
 
 if __name__ == "__main__":
-    pre_trained_model_path = "./model/teacher_model.pt"
-    val_data_pattern = "data/fineweb10B/fineweb_val_*.bin"
+    pre_trained_model_path = "/home/bsnaas/git/gpt-distill/model/teacher_model.pt"
+    val_data_pattern = "/home/bsnaas/git/gpt-distill/data/fineweb10B/fineweb_val_*.bin"
     evaluate_model(pre_trained_model_path, val_data_pattern)
