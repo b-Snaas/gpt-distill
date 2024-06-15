@@ -6,6 +6,7 @@ from torch import nn
 import torch.nn.functional as F
 from dataclasses import dataclass
 import wandb
+import math
 
 @dataclass
 class GPTConfig:
