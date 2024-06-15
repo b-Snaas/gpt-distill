@@ -383,7 +383,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model.train()
         # forward pass
         with ctx:
-            output, loss = model(x, y, return_logits=True)
+            output, initial_loss = model(x, y, return_logits=True)
 
             if distillation_mode == "pre_trained" and pre_trained_model_path:
                 with torch.no_grad():
@@ -391,7 +391,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 out = pre_trained_output.transpose(2, 1).detach()
                 outp = F.softmax(out, dim=1)
                 distill_loss = F.cross_entropy(output.transpose(2, 1), outp, reduction='mean')
-                loss += gamma * distill_loss
+                loss = (1 - gamma) * initial_loss + gamma * distill_loss
+            else:
+                loss = initial_loss  # Handle the case where no distillation is applied
 
         # Increment the counter for instances seen
         instances_seen += x.size(0)
