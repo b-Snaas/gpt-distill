@@ -196,5 +196,5 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=10, sequ
 
 if __name__ == "__main__":
     pre_trained_model_path = "/home/bsnaas/git/gpt-distill/model/teacher_model.pt"
-    val_data_pattern = "/bsnaas/git/gpt-distill/data/fineweb10B/fineweb_val_*.bin"
+    val_data_pattern = "data/fineweb10B/fineweb_val_*.bin"
     evaluate_model(pre_trained_model_path, val_data_pattern)
