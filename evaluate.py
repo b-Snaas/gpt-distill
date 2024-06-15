@@ -170,6 +170,10 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=10, sequ
     model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=12, n_head=12, n_embd=768)
     model = GPT(model_config)
     state_dict = torch.load(pre_trained_model_path)
+
+    # Remove the "_orig_mod." prefix from the keys in the state_dict
+    state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+
     model.load_state_dict(state_dict)
     model.eval()
     model.cuda()
