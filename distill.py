@@ -255,12 +255,6 @@ def log_system_info():
         print0(f"  GPU Load: {info['load_percent']}%")
         print0(f"  Temperature: {info['temperature_C']}°C")
 
-def save_model(model, path):
-    # Ensure the directory exists
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    torch.save(model.state_dict(), path)
-    print(f"Model saved to {path}")
-
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model="d12", 
@@ -316,8 +310,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     }[model]
     model = GPT(model_config)
     model = model.train().cuda()
-    if hasattr(config, "coordinate_descent_tuning"):
-        config.coordinate_descent_tuning = True # suggested by @Chillee
     print0("compiling the model...")
 
     model = torch.compile(model)
@@ -326,10 +318,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     if distillation_mode == "pre_trained" and pre_trained_model_path:
         pre_trained_model = GPT(model_config)
         state_dict = torch.load(pre_trained_model_path)
+
+        # Remove the "_orig_mod." prefix from the keys in the state_dict
+        state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+
         pre_trained_model.load_state_dict(state_dict)
         pre_trained_model.eval()
-        if torch.cuda.is_available():
-            pre_trained_model.cuda()
+        pre_trained_model.cuda()
 
     # load tokens
     train_loader = DataLoader(input_bin, B, T)
@@ -424,7 +419,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # the 0th iteration is often an outlier (much slower) => skip logging it
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
-        # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
+        print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         wandb.log({"train_loss": lossf, "step": step, "instances_seen": instances_seen})  # Log training loss and instances seen to wandb
 
         # keep track of smooth timings, last 20 iterations
@@ -435,7 +430,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = timings[-20:]
     print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
-
 
 if __name__ == "__main__":
     fire.Fire(train)
