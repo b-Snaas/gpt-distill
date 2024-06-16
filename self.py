@@ -128,9 +128,7 @@ class GPT(nn.Module):
         x = tok_emb + pos_emb
 
         # Calculate the distillation index based on the current depth
-        # Explicitly convert to integer and handle potential division by zero
-        num_blocks = len(self.transformer.h)
-        dist_index = (current_depth - 1) // (num_blocks // 4) if num_blocks // 4 > 0 else 0
+        dist_index = (current_depth - 1) // (self.config.n_layer // 4)
 
         for i, block in enumerate(self.transformer.h[:current_depth]):
             x = block(x)
