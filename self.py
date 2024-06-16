@@ -118,31 +118,35 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, current_depth, distill_index, targets=None, return_logits=True):
+    def forward(self, idx, current_depth, targets=None, return_logits=True):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # shape (t)
 
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+        # Forward the GPT model
+        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+        pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
         x = tok_emb + pos_emb
 
-        # Forward pass up to the chosen depth
+        # Calculate the distillation index based on the current depth
+        dist_index = (current_depth - 1) // (len(self.transformer.h) // 4)
+
         for i in range(current_depth):
             x = self.transformer.h[i](x)
+
+        # Apply the distillation layer for the current depth
         x = rmsnorm(x)
-        logits = self.distill_layers[distill_index](x)
+        logits = self.distill_layers[dist_index](x)
 
         if targets is not None:
-            # if we are given some desired targets also calculate the loss
+            # Calculate the loss for the current depth
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.distill_layers[distill_index](x[:, [-1], :])
+            # Inference-time mini-optimization: only forward the lm_head on the very last position
+            logits = self.distill_layers[dist_index](x[:, [-1], :])
             loss = None
 
-        # there are performance reasons why not returning logits is prudent, if not needed
+        # If not returning logits, set logits to None
         if not return_logits:
             logits = None
 
