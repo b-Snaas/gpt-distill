@@ -398,9 +398,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     quarter_depth = depth // 4
     batch_size_by_depth = {
-        quarter_depth: batch_size + 15,
-        2 * quarter_depth: batch_size + 10,
-        3 * quarter_depth: batch_size + 5,
+        quarter_depth: batch_size,
+        2 * quarter_depth: batch_size,
+        3 * quarter_depth: batch_size,
         depth: batch_size
     }
 
