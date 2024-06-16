@@ -242,8 +242,6 @@ def save_model(model, path):
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            output_dir= "model", 
-            model="d12", 
             batch_size=64, 
             sequence_length=1024, 
             num_iterations=12288, 
@@ -252,13 +250,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             weight_decay=0.1,
             val_loss_every=128, 
             val_max_steps=20,
+            depth=12,
+            embedding=768,
             ):
 
     # Initialize wandb
     wandb.init(project="gpt2_distill", config={
         "input_bin": input_bin,
         "input_val_bin": input_val_bin,
-        "output_dir": output_dir,
         "model": model,
         "batch_size": batch_size,
         "sequence_length": sequence_length,
@@ -268,6 +267,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "weight_decay": weight_decay,
         "val_loss_every": val_loss_every,
         "val_max_steps": val_max_steps,
+        "depth": depth,
+        "embedding": embedding,
     })
 
     # args error checking and convenience variables
@@ -282,14 +283,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
-     # init the model from scratch
-    model_config = {
-        "d3": GPTConfig(block_size=1024, vocab_size=50257, n_layer=3, n_head=8, n_embd=128),
-        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=12, n_head=12, n_embd=768),
-        "d24": GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024),
-        "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),
-        "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),
-    }[model]
+    # init the model from scratch
+    model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=8, n_embd=embedding)
     model = GPT(model_config)
     model = model.train().cuda()
     if hasattr(config, "coordinate_descent_tuning"):
@@ -392,11 +387,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = timings[-20:]
     print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
-
-    # Save the model at the end of training
-    if output_dir:
-        save_path = os.path.join(output_dir, "teacher_model.pt")
-        save_model(model, save_path)
 
 if __name__ == "__main__":
     fire.Fire(train)
