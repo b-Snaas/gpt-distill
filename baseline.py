@@ -23,8 +23,8 @@ with open(sys.argv[0]) as f:
 
 # Memory profiling functions
 def print_memory_usage(tag):
-    print(f"[{tag}] Memory allocated: {torch.cuda.memory_allocated() / (1024 * 1024):.2f} MB")
-    print(f"[{tag}] Memory reserved: {torch.cuda.memory_reserved() / (1024 * 1024):.2f} MB")
+    print("[{}] Memory allocated: {:.2f} MB".format(tag, torch.cuda.memory_allocated() / (1024 * 1024)))
+    print("[{}] Memory reserved: {:.2f} MB".format(tag, torch.cuda.memory_reserved() / (1024 * 1024)))
 
 # -----------------------------------------------------------------------------
 # PyTorch nn.Module definitions for the GPT-2 model
