@@ -258,7 +258,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     wandb.init(project="gpt2_distill", config={
         "input_bin": input_bin,
         "input_val_bin": input_val_bin,
-        "model": model,
         "batch_size": batch_size,
         "sequence_length": sequence_length,
         "num_iterations": num_iterations,
