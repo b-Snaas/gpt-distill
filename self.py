@@ -118,7 +118,7 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, current_depth, targets=None, return_logits=True):
+    def forward(self, idx, current_depth, distill_index, targets=None, return_logits=True):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
@@ -132,14 +132,14 @@ class GPT(nn.Module):
         for i in range(current_depth):
             x = self.transformer.h[i](x)
         x = rmsnorm(x)
-        logits = self.distill_layers[current_depth // (self.config.n_layer // 4) - 1](x)
+        logits = self.distill_layers[distill_index](x)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.distill_layers[current_depth // (self.config.n_layer // 4) - 1](x[:, [-1], :])
+            logits = self.distill_layers[distill_index](x[:, [-1], :])
             loss = None
 
         # there are performance reasons why not returning logits is prudent, if not needed
@@ -374,7 +374,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
                     current_depth = get_layer_depth(step, num_iterations, depth)
-                    _, loss = model(x_val, current_depth, y_val, return_logits=False)
+                    distill_index = (current_depth // (depth // 4)) - 1
+                    _, loss = model(x_val, current_depth, distill_index, y_val, return_logits=False)
                     val_loss += loss.item()
                 val_loss /= val_max_steps
             # log to console and to file
@@ -388,13 +389,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model.train()
         # Get the current depth for the forward pass
         current_depth = get_layer_depth(step, num_iterations, depth)
+        distill_index = (current_depth // (depth // 4)) - 1
         B = batch_size_by_depth[current_depth]
         learning_rate = lr_by_depth[current_depth]
 
         train_loader = DataLoader(input_bin, B, T)
         # forward pass
         with ctx:
-            _, loss = model(x, current_depth, y, return_logits=False)
+            _, loss = model(x, current_depth, distill_index, y, return_logits=False)
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
         # Increment the counter for instances seen
