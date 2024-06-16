@@ -21,13 +21,16 @@ torch.set_float32_matmul_precision('high')
 with open(sys.argv[0]) as f:
     code = f.read()
 
-# Memory profiling functions
-def print_memory_usage(tag, before_alloc, before_reserved):
-    current_alloc = torch.cuda.memory_allocated() / (1024 * 1024)
-    current_reserved = torch.cuda.memory_reserved() / (1024 * 1024)
-    print("[{}] Memory allocated: {:.2f} MB (+{:.2f} MB)".format(tag, current_alloc, current_alloc - before_alloc))
-    print("[{}] Memory reserved: {:.2f} MB (+{:.2f} MB)".format(tag, current_reserved, current_reserved - before_reserved))
-    return current_alloc, current_reserved
+# Helper functions to calculate memory usage
+def tensor_size(tensor):
+    return tensor.numel() * tensor.element_size()
+
+def print_tensor_size(tag, tensor):
+    size_mb = tensor_size(tensor) / (1024 * 1024)
+    print(f"[{tag}] Tensor size: {size_mb:.2f} MB")
+
+def print_memory_stats(tag):
+    stats = torch.cuda.memory_stats()
 
 # -----------------------------------------------------------------------------
 # PyTorch nn.Module definitions for the GPT-2 model
@@ -87,13 +90,9 @@ class Block(nn.Module):
         self.attn_scale = (1 / math.sqrt(2 * config.n_layer))
 
     def forward(self, x):
-        before_alloc = torch.cuda.memory_allocated() / (1024 * 1024)
-        before_reserved = torch.cuda.memory_reserved() / (1024 * 1024)
 
         x = x + self.attn_scale * self.attn(rmsnorm(x))
         x = x + self.mlp(rmsnorm(x))
-
-        after_alloc, after_reserved = print_memory_usage(f"Block {self.index}", before_alloc, before_reserved)
 
         return x
 
@@ -130,9 +129,6 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None, return_logits=True):
-        before_alloc = torch.cuda.memory_allocated() / (1024 * 1024)
-        before_reserved = torch.cuda.memory_reserved() / (1024 * 1024)
-
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
@@ -145,8 +141,6 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             x = block(x)
         x = rmsnorm(x)
-
-        after_alloc, after_reserved = print_memory_usage("GPT", before_alloc, before_reserved)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
@@ -253,30 +247,6 @@ def print0(*args, **kwargs):
     # modified print that only prints from the master process
     # if this is not a distributed run, it's just a print
     print(*args, **kwargs)
-
-def get_gpu_memory_info():
-    gpus = GPUtil.getGPUs()
-    gpu_info = {}
-    for gpu in gpus:
-        gpu_info[gpu.id] = {
-            'name': gpu.name,
-            'memory_total_MB': gpu.memoryTotal,
-            'memory_free_MB': gpu.memoryFree,
-            'memory_used_MB': gpu.memoryUsed,
-            'load_percent': gpu.load * 100,
-            'temperature_C': gpu.temperature
-        }
-    return gpu_info
-
-def log_system_info():
-    gpu_info = get_gpu_memory_info()
-    for gpu_id, info in gpu_info.items():
-        print0(f"GPU {gpu_id}: {info['name']}")
-        print0(f"  Total Memory: {info['memory_total_MB']} MB")
-        print0(f"  Free Memory: {info['memory_free_MB']} MB")
-        print0(f"  Used Memory: {info['memory_used_MB']} MB")
-        print0(f"  GPU Load: {info['load_percent']}%")
-        print0(f"  Temperature: {info['temperature_C']}°C")
 
 def save_model(model, path):
     # Ensure the directory exists
