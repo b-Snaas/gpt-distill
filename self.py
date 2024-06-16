@@ -179,6 +179,7 @@ class GPT(nn.Module):
         else:
             y = None
 
+        y = rmsnorm(y)
         logits = y
 
         # Calculate the loss for the current depth if targets are provided
@@ -276,6 +277,9 @@ class DataLoader:
         if self.current_position + (B * T + 1) > len(self.tokens):
             self.advance()
         return x.cuda(), y.cuda()
+
+    def update_batch_size(self, new_batch_size):
+        self.B = new_batch_size
 
 # -----------------------------------------------------------------------------
 # int main
@@ -436,11 +440,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model.train()
         # Get the current depth for the forward pass
         current_depth = get_layer_depth(step, num_iterations, depth)
-        distill_index = (current_depth // (depth // 4)) - 1
         B = batch_size_by_depth[current_depth]
         learning_rate = lr_by_depth[current_depth]
 
-        train_loader = DataLoader(input_bin, B, T)
+        # Update batch size of train_loader
+        train_loader.update_batch_size(B)
+
         # forward pass
         with ctx:
             _, loss = model(x, current_depth, y, return_logits=False)
@@ -448,7 +453,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         x, y = train_loader.next_batch()
         # Increment the counter for instances seen
         instances_seen += x.size(0)
-        # backward pass
         # backward pass
         loss.backward()
         for layer in model.transformer.h[:current_depth]:
