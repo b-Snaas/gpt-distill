@@ -21,6 +21,11 @@ torch.set_float32_matmul_precision('high')
 with open(sys.argv[0]) as f:
     code = f.read()
 
+# Memory profiling functions
+def print_memory_usage(tag):
+    print(f"[{tag}] Memory allocated: {torch.cuda.memory_allocated() / (1024 * 1024):.2f} MB")
+    print(f"[{tag}] Memory reserved: {torch.cuda.memory_reserved() / (1024 * 1024):.2f} MB")
+
 # -----------------------------------------------------------------------------
 # PyTorch nn.Module definitions for the GPT-2 model
 
@@ -350,6 +355,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
+
+    # Memory profiling
+    def memory_hook(module, input, output):
+        if torch.cuda.is_available():
+            print_memory_usage(f"Layer {module.__class__.__name__}")
+
+    for name, module in model.named_modules():
+        module.register_forward_hook(memory_hook)
+
     for step in range(num_iterations + 1):
         t0 = time.time()
         last_step = (step == num_iterations)
