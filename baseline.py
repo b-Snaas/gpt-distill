@@ -22,9 +22,12 @@ with open(sys.argv[0]) as f:
     code = f.read()
 
 # Memory profiling functions
-def print_memory_usage(tag):
-    print("[{}] Memory allocated: {:.2f} MB".format(tag, torch.cuda.memory_allocated() / (1024 * 1024)))
-    print("[{}] Memory reserved: {:.2f} MB".format(tag, torch.cuda.memory_reserved() / (1024 * 1024)))
+def print_memory_usage(tag, before_alloc, before_reserved):
+    current_alloc = torch.cuda.memory_allocated() / (1024 * 1024)
+    current_reserved = torch.cuda.memory_reserved() / (1024 * 1024)
+    print("[{}] Memory allocated: {:.2f} MB (+{:.2f} MB)".format(tag, current_alloc, current_alloc - before_alloc))
+    print("[{}] Memory reserved: {:.2f} MB (+{:.2f} MB)".format(tag, current_reserved, current_reserved - before_reserved))
+    return current_alloc, current_reserved
 
 # -----------------------------------------------------------------------------
 # PyTorch nn.Module definitions for the GPT-2 model
@@ -76,15 +79,22 @@ class MLP(nn.Module):
 
 class Block(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config, index):
         super().__init__()
+        self.index = index
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
         self.attn_scale = (1 / math.sqrt(2 * config.n_layer))
 
     def forward(self, x):
+        before_alloc = torch.cuda.memory_allocated() / (1024 * 1024)
+        before_reserved = torch.cuda.memory_reserved() / (1024 * 1024)
+
         x = x + self.attn_scale * self.attn(rmsnorm(x))
         x = x + self.mlp(rmsnorm(x))
+
+        after_alloc, after_reserved = print_memory_usage(f"Block {self.index}", before_alloc, before_reserved)
+
         return x
 
 # -----------------------------------------------------------------------------
@@ -107,7 +117,7 @@ class GPT(nn.Module):
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            h = nn.ModuleList([Block(config, idx) for idx in range(config.n_layer)]),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_head.LLMC_SKIP_INIT = 1 # don't init this one, we will tie weights
@@ -120,6 +130,9 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None, return_logits=True):
+        before_alloc = torch.cuda.memory_allocated() / (1024 * 1024)
+        before_reserved = torch.cuda.memory_reserved() / (1024 * 1024)
+
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
@@ -132,6 +145,8 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             x = block(x)
         x = rmsnorm(x)
+
+        after_alloc, after_reserved = print_memory_usage("GPT", before_alloc, before_reserved)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
@@ -356,17 +371,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
 
-    # Memory profiling
-    def memory_hook(module, input, output):
-        if torch.cuda.is_available():
-            print_memory_usage(f"Layer {module.__class__.__name__}")
-
-    for name, module in model.named_modules():
-        module.register_forward_hook(memory_hook)
-
     for step in range(num_iterations + 1):
         t0 = time.time()
         last_step = (step == num_iterations)
+
+        print(f"==== Batch {step} ====")
 
         # once in a while evaluate the validation dataset
         if (val_loss_every > 0 \
