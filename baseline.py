@@ -395,7 +395,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
 
     # Save the model at the end of training
-    if output_dir:
+    if model_path:
         save_model(model, model_path)
 
 if __name__ == "__main__":
