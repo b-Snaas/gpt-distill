@@ -117,34 +117,44 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             
-    def forward(self, idx, current_depth, targets=None, return_logits=True):
+    def forward(self, idx, targets=None, return_logits=True, current_depth=None):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # shape (t)
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
 
-        # Forward the GPT model
-        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
+        tok_emb = self.transformer.wte(idx)
+        pos_emb = self.transformer.wpe(pos)
         x = tok_emb + pos_emb
 
-        # Calculate the distillation index based on the current depth
-        dist_index = (current_depth - 1) // (self.config.n_layer // 4)
+        quarter_depth = len(self.transformer.h) // 4
+        dist_points = [quarter_depth - 1, len(self.transformer.h) - 1]
+
+        dist_output_1st = None
+        dist_output_2nd = None
 
         for i, block in enumerate(self.transformer.h[:current_depth]):
             x = block(x)
 
-        # Apply the distillation layer for the current depth
+            if i == dist_points[0]:
+                dist_output_1st = x
+            elif i == dist_points[1]:
+                dist_output_2nd = x
+
         x = rmsnorm(x)
-        logits = self.distill_layers[dist_index](x)
 
-        # Calculate the loss for the current depth
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        y_1st = None if dist_output_1st is None else self.dist_layers[0](dist_output_1st)
+        y_2nd = None if dist_output_2nd is None else self.dist_layers[1](dist_output_2nd)
 
-        # If not returning logits, set logits to None
+        losses = []
+        for i, y in enumerate([y_1st, y_2nd]):
+            if y is not None and i < current_depth // quarter_depth:
+                loss = F.cross_entropy(y.view(-1, y.size(-1)), targets.view(-1), ignore_index=-1)
+                losses.append(loss)
+
         if not return_logits:
-            logits = None
+            y_1st, y_2nd = None, None
 
-        return logits, loss
+        return losses, y_1st, y_2nd
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
