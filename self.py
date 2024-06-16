@@ -16,6 +16,8 @@ import fire
 import wandb
 import GPUtil
 import torch._dynamo
+import torch.dynamo
+
 torch._dynamo.config.suppress_errors = True
 
 torch.set_float32_matmul_precision('high')
@@ -120,7 +122,6 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    @torch.dynamo.skip
     def forward(self, idx, current_depth, targets=None, return_logits=True):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -131,15 +132,12 @@ class GPT(nn.Module):
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
         x = tok_emb + pos_emb
 
-        # Calculate the distillation index based on the current depth
-        dist_index = (current_depth - 1) // (len(self.transformer.h) // 4)
-
         for i, block in enumerate(self.transformer.h[:current_depth]):
             x = block(x)
 
         # Apply the distillation layer for the current depth
         x = rmsnorm(x)
-        logits = self.distill_layers[dist_index](x)
+        logits = self.distill_layers[0](x)
 
         # Calculate the loss for the current depth
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
