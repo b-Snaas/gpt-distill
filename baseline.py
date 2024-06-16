@@ -242,7 +242,7 @@ def save_model(model, path):
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            output_dir= None, 
+            model_path= None, 
             model="d12", 
             batch_size=64, 
             sequence_length=1024, 
@@ -253,14 +253,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             val_loss_every=128, 
             val_max_steps=20,
             depth=12,
-            embedding=768,
             ):
 
     # Initialize wandb
     wandb.init(project="gpt2_distill", config={
         "input_bin": input_bin,
         "input_val_bin": input_val_bin,
-        "output_dir": output_dir,
+        "output_dir": model_path,
         "model": model,
         "batch_size": batch_size,
         "sequence_length": sequence_length,
@@ -287,7 +286,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
      # init the model from scratch
     model_config = {
         "d3": GPTConfig(block_size=1024, vocab_size=50257, n_layer=3, n_head=8, n_embd=128),
-        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=8, n_embd=embedding),
+        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=12, n_embd=768),
         "d24": GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024),
         "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),
         "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),
@@ -397,8 +396,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # Save the model at the end of training
     if output_dir:
-        save_path = os.path.join(output_dir, "teacher_model.pt")
-        save_model(model, save_path)
+        save_model(model, model_path)
 
 if __name__ == "__main__":
     fire.Fire(train)
