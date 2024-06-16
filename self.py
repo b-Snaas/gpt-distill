@@ -133,8 +133,8 @@ class GPT(nn.Module):
         # Calculate the distillation index based on the current depth
         dist_index = (current_depth - 1) // (len(self.transformer.h) // 4)
 
-        for i in range(current_depth):
-            x = self.transformer.h[i](x)
+        for i, block in enumerate(self.transformer.h[:current_depth]):
+            x = block(x)
 
         # Apply the distillation layer for the current depth
         x = rmsnorm(x)
