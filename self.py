@@ -14,7 +14,6 @@ import torch._inductor.config as config
 
 import fire
 import wandb
-import GPUtil
 
 torch.set_float32_matmul_precision('high')
 
@@ -117,7 +116,7 @@ class GPT(nn.Module):
         # initialize the position embedding at std=0.02 to match the scale of the token embedding.
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
+            
     def forward(self, idx, current_depth, targets=None, return_logits=True):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -128,12 +127,17 @@ class GPT(nn.Module):
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
         x = tok_emb + pos_emb
 
+        # Calculate the distillation index based on the current depth
+        # Explicitly convert to integer and handle potential division by zero
+        num_blocks = len(self.transformer.h)
+        dist_index = (current_depth - 1) // (num_blocks // 4) if num_blocks // 4 > 0 else 0
+
         for i, block in enumerate(self.transformer.h[:current_depth]):
             x = block(x)
 
         # Apply the distillation layer for the current depth
         x = rmsnorm(x)
-        logits = self.distill_layers[0](x)
+        logits = self.distill_layers[dist_index](x)
 
         # Calculate the loss for the current depth
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
@@ -143,7 +147,7 @@ class GPT(nn.Module):
             logits = None
 
         return logits, loss
-    
+
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
         return optimizer
