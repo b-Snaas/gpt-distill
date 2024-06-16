@@ -301,20 +301,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # args error checking and convenience variables
     B, T = batch_size, sequence_length
-    quarter_depth = depth // 4
-    batch_size_by_depth = {
-        quarter_depth: batch_size,
-        2 * quarter_depth: batch_size,
-        3 * quarter_depth: batch_size,
-        depth: batch_size
-    }
 
-    lr_by_depth = {
-        quarter_depth: 0.00018,
-        2 * quarter_depth: 0.00018,
-        3 * quarter_depth: 0.00018,
-        depth: 0.00018
-    }
     assert 1 <= T <= 1024
 
     assert torch.cuda.is_available(), "CUDA is required"
@@ -365,6 +352,21 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
 
+    quarter_depth = depth // 4
+    batch_size_by_depth = {
+        quarter_depth: batch_size,
+        2 * quarter_depth: batch_size,
+        3 * quarter_depth: batch_size,
+        depth: batch_size
+    }
+
+    lr_by_depth = {
+        quarter_depth: 0.00018,
+        2 * quarter_depth: 0.00018,
+        3 * quarter_depth: 0.00018,
+        depth: 0.00018
+    }
+
     for step in range(num_iterations + 1):
         t0 = time.time()
         last_step = (step == num_iterations)
@@ -401,7 +403,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         train_loader = DataLoader(input_bin, B, T)
         # forward pass
         with ctx:
-            _, loss = model(x, current_depth, distill_index, y, return_logits=False)
+            _, loss = model(x, current_depth, y, return_logits=False)
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
         # Increment the counter for instances seen
