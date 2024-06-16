@@ -21,17 +21,6 @@ torch.set_float32_matmul_precision('high')
 with open(sys.argv[0]) as f:
     code = f.read()
 
-# Helper functions to calculate memory usage
-def tensor_size(tensor):
-    return tensor.numel() * tensor.element_size()
-
-def print_tensor_size(tag, tensor):
-    size_mb = tensor_size(tensor) / (1024 * 1024)
-    print(f"[{tag}] Tensor size: {size_mb:.2f} MB")
-
-def print_memory_stats(tag):
-    stats = torch.cuda.memory_stats()
-
 # -----------------------------------------------------------------------------
 # PyTorch nn.Module definitions for the GPT-2 model
 
@@ -82,18 +71,15 @@ class MLP(nn.Module):
 
 class Block(nn.Module):
 
-    def __init__(self, config, index):
+    def __init__(self, config):
         super().__init__()
-        self.index = index
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
         self.attn_scale = (1 / math.sqrt(2 * config.n_layer))
 
     def forward(self, x):
-
         x = x + self.attn_scale * self.attn(rmsnorm(x))
         x = x + self.mlp(rmsnorm(x))
-
         return x
 
 # -----------------------------------------------------------------------------
@@ -116,7 +102,7 @@ class GPT(nn.Module):
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
-            h = nn.ModuleList([Block(config, idx) for idx in range(config.n_layer)]),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_head.LLMC_SKIP_INIT = 1 # don't init this one, we will tie weights
@@ -344,8 +330,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     for step in range(num_iterations + 1):
         t0 = time.time()
         last_step = (step == num_iterations)
-
-        print(f"==== Batch {step} ====")
 
         # once in a while evaluate the validation dataset
         if (val_loss_every > 0 \
