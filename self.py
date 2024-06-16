@@ -378,8 +378,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
                     current_depth = get_layer_depth(step, num_iterations, depth)
-                    distill_index = (current_depth // (depth // 4)) - 1
-                    _, loss = model(x_val, current_depth, distill_index, y_val, return_logits=False)
+                    _, loss = model(x_val, current_depth, y_val, return_logits=False)
                     val_loss += loss.item()
                 val_loss /= val_max_steps
             # log to console and to file
