@@ -93,8 +93,8 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
 
-class GPT(nn.Module):
 
+class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -107,6 +107,10 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_head.LLMC_SKIP_INIT = 1 # don't init this one, we will tie weights
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+
+        # Additional layers for distillation outputs
+        self.distill_layers = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size, bias=False) for _ in range(4)])
+
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -114,7 +118,7 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, return_logits=True):
+    def forward(self, idx, current_depth, targets=None, return_logits=True):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
@@ -124,17 +128,18 @@ class GPT(nn.Module):
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = tok_emb + pos_emb
 
-        for block in self.transformer.h:
-            x = block(x)
+        # Forward pass up to the chosen depth
+        for i in range(current_depth):
+            x = self.transformer.h[i](x)
         x = rmsnorm(x)
+        logits = self.distill_layers[current_depth // (self.config.n_layer // 4) - 1](x)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            logits = self.distill_layers[current_depth // (self.config.n_layer // 4) - 1](x[:, [-1], :])
             loss = None
 
         # there are performance reasons why not returning logits is prudent, if not needed
@@ -240,19 +245,37 @@ def save_model(model, path):
     torch.save(model.state_dict(), path)
     print(f"Model saved to {path}")
 
+def get_layer_depth(batch_num, num_batches, depth):
+    quarter_depth = depth // 4
+    phases = [0.25, 0.5, 0.75, 1.0]
+    weights = [
+        [0.6, 0.2, 0.1, 0.1],
+        [0.4, 0.3, 0.2, 0.1],
+        [0.1, 0.2, 0.3, 0.4],
+        [0.0, 0.1, 0.2, 0.7]  
+    ]
+    # Safeguard against the ratio exactly equalling 1.0
+    phase_index = next((i for i, phase in enumerate(phases) if batch_num / num_batches <= phase), len(phases) - 1)
+    current_weights = weights[phase_index]
+    chosen_depth = np.random.choice(
+        [quarter_depth, 2 * quarter_depth, 3 * quarter_depth, depth],
+        p=current_weights
+    )
+    return chosen_depth
+
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
-            input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            batch_size=64, 
-            sequence_length=1024, 
-            num_iterations=12288, 
-            learning_rate=0.0018, 
-            warmup_iters=256, 
-            weight_decay=0.1,
-            val_loss_every=128, 
-            val_max_steps=20,
-            depth=12,
-            embedding=768,
-            ):
+          input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
+          batch_size=64, 
+          sequence_length=512, 
+          num_iterations=12288, 
+          learning_rate=0.0018, 
+          warmup_iters=256, 
+          weight_decay=0.1,
+          val_loss_every=128, 
+          val_max_steps=20,
+          depth=12,
+          embedding=768,
+          ):
 
     # Initialize wandb
     wandb.init(project="gpt2_distill", config={
@@ -272,6 +295,20 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # args error checking and convenience variables
     B, T = batch_size, sequence_length
+    quarter_depth = depth // 4
+    batch_size_by_depth = {
+        quarter_depth: batch_size,
+        2 * quarter_depth: batch_size,
+        3 * quarter_depth: batch_size,
+        depth: batch_size
+    }
+
+    lr_by_depth = {
+        quarter_depth: 0.00018,
+        2 * quarter_depth: 0.00018,
+        3 * quarter_depth: 0.00018,
+        depth: 0.00018
+    }
     assert 1 <= T <= 1024
 
     assert torch.cuda.is_available(), "CUDA is required"
@@ -336,7 +373,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    _, loss = model(x_val, y_val, return_logits=False)
+                    current_depth = get_layer_depth(step, num_iterations, depth)
+                    _, loss = model(x_val, current_depth, y_val, return_logits=False)
                     val_loss += loss.item()
                 val_loss /= val_max_steps
             # log to console and to file
@@ -348,9 +386,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
+        # Get the current depth for the forward pass
+        current_depth = get_layer_depth(step, num_iterations, depth)
+        B = batch_size_by_depth[current_depth]
+        learning_rate = lr_by_depth[current_depth]
+
+        train_loader = DataLoader(input_bin, B, T)
         # forward pass
         with ctx:
-            _, loss = model(x, y, return_logits=False)
+            _, loss = model(x, current_depth, y, return_logits=False)
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
         # Increment the counter for instances seen
