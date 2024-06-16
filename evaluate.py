@@ -167,7 +167,7 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=10, sequ
     })
     
     # Load the pre-trained model
-    model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=12, n_head=12, n_embd=768)
+    model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=3, n_head=12, n_embd=768)
     model = GPT(model_config)
     state_dict = torch.load(pre_trained_model_path)
 
