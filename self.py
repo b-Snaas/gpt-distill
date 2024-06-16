@@ -15,10 +15,6 @@ import torch._inductor.config as config
 import fire
 import wandb
 import GPUtil
-import torch._dynamo
-import torch.dynamo
-
-torch._dynamo.config.suppress_errors = True
 
 torch.set_float32_matmul_precision('high')
 
