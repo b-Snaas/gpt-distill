@@ -169,13 +169,13 @@ class GPT(nn.Module):
 
         # Determine the deepest available distillation output
         if dist_output_4th is not None:
-            y = self.dist_layers[3](dist_output_4th)
+            y = self.distill_layers[3](dist_output_4th)
         elif dist_output_3rd is not None:
-            y = self.dist_layers[2](dist_output_3rd)
+            y = self.distill_layers[2](dist_output_3rd)
         elif dist_output_2nd is not None:
-            y = self.dist_layers[1](dist_output_2nd)
+            y = self.distill_layers[1](dist_output_2nd)
         elif dist_output_1st is not None:
-            y = self.dist_layers[0](dist_output_1st)
+            y = self.distill_layers[0](dist_output_1st)
         else:
             y = None
 
