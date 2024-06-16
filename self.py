@@ -120,6 +120,7 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    @torch.dynamo.skip
     def forward(self, idx, current_depth, targets=None, return_logits=True):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -404,9 +405,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # Increment the counter for instances seen
         instances_seen += x.size(0)
         # backward pass
+        # backward pass
         loss.backward()
-        for p in model.parameters():
-            p.grad = p.grad / (p.grad.norm() + 1e-6)
+        for layer in model.transformer.h[:current_depth]:
+            for p in layer.parameters():
+                if p.grad is not None:
+                    p.grad = p.grad / (p.grad.norm() + 1e-6)
         # determine and set the learning rate for this iteration
         lr = get_lr(step)
         for param_group in optimizer.param_groups:
