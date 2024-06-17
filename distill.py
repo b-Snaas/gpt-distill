@@ -232,21 +232,22 @@ def print0(*args, **kwargs):
 
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
-            input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            model="d12", 
-            batch_size=64, 
-            sequence_length=1024, 
-            num_iterations=12288, 
-            learning_rate=0.0018, 
-            warmup_iters=256, 
-            weight_decay=0.1,
-            val_loss_every=128, 
-            val_max_steps=20,
-            distillation_mode=None,
-            pre_trained_model_path=None,
-            initial_gamma=0.5,
-            gamma_decay_batches=25000,  # number of batches over which gamma decays to 0
-            ):
+          input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
+          model="d12", 
+          batch_size=64, 
+          sequence_length=1024, 
+          num_iterations=12288, 
+          learning_rate=0.0018, 
+          warmup_iters=256, 
+          weight_decay=0.1,
+          val_loss_every=128, 
+          val_max_steps=20,
+          distillation_mode=None,
+          pre_trained_model_path=None,
+          initial_gamma=0.5,
+          gamma_decay_batches=25000,  # number of batches over which gamma decays to 0
+          disable_gamma_decay=False,  # new argument to control gamma decay
+          ):
 
     # Initialize wandb
     wandb.init(project="gpt2_distill", config={
@@ -265,6 +266,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "pre_trained_model_path": pre_trained_model_path,
         "initial_gamma": initial_gamma,
         "gamma_decay_batches": gamma_decay_batches,
+        "disable_gamma_decay": disable_gamma_decay,  # log the new argument
     })
 
     # args error checking and convenience variables
@@ -333,6 +335,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * learning_rate
 
     def get_gamma(it):
+        if disable_gamma_decay:
+            return initial_gamma
         if it >= gamma_decay_batches:
             return 0.0
         decay_ratio = it / gamma_decay_batches
