@@ -419,6 +419,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # Discard the pre-trained model from memory after gamma decay batches
         if pre_trained_model is not None and step == gamma_decay_batches - 1:
             del pre_trained_model
+            pre_trained_model = None
             torch.cuda.empty_cache()
             print("Pre-trained model discarded from memory.")
 
