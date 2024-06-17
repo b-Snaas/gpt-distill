@@ -295,6 +295,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Load pre-trained model for distillation if provided
     pre_trained_model = None
     if distillation_mode == "pre_trained" and pre_trained_model_path:
+        print(f"Loading pre-trained model from {pre_trained_model_path}.")
         pre_trained_model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=3, n_head=12, n_embd=768)
         pre_trained_model = GPT(pre_trained_model_config)
         state_dict = torch.load(pre_trained_model_path)
