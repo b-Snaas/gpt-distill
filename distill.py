@@ -14,7 +14,6 @@ import torch._inductor.config as config
 
 import fire
 import wandb
-import GPUtil
 
 torch.set_float32_matmul_precision('high')
 
@@ -231,29 +230,6 @@ def print0(*args, **kwargs):
     # if this is not a distributed run, it's just a print
     print(*args, **kwargs)
 
-def get_gpu_memory_info():
-    gpus = GPUtil.getGPUs()
-    gpu_info = {}
-    for gpu in gpus:
-        gpu_info[gpu.id] = {
-            'name': gpu.name,
-            'memory_total_MB': gpu.memoryTotal,
-            'memory_free_MB': gpu.memoryFree,
-            'memory_used_MB': gpu.memoryUsed,
-            'load_percent': gpu.load * 100,
-            'temperature_C': gpu.temperature
-        }
-    return gpu_info
-
-def log_system_info():
-    gpu_info = get_gpu_memory_info()
-    for gpu_id, info in gpu_info.items():
-        print0(f"GPU {gpu_id}: {info['name']}")
-        print0(f"  Total Memory: {info['memory_total_MB']} MB")
-        print0(f"  Free Memory: {info['memory_free_MB']} MB")
-        print0(f"  Used Memory: {info['memory_used_MB']} MB")
-        print0(f"  GPU Load: {info['load_percent']}%")
-        print0(f"  Temperature: {info['temperature_C']}°C")
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
@@ -268,7 +244,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             val_max_steps=20,
             distillation_mode=None,
             pre_trained_model_path=None,
-            gamma=0.5,
+            initial_gamma=0.5,
+            gamma_decay_batches=25000,  # number of batches over which gamma decays to 0
             ):
 
     # Initialize wandb
@@ -286,7 +263,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "val_max_steps": val_max_steps,
         "distillation_mode": distillation_mode,
         "pre_trained_model_path": pre_trained_model_path,
-        "gamma": gamma,
+        "initial_gamma": initial_gamma,
+        "gamma_decay_batches": gamma_decay_batches,
     })
 
     # args error checking and convenience variables
@@ -315,8 +293,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     model = torch.compile(model)
 
     # Load pre-trained model for distillation if provided
+    pre_trained_model = None
     if distillation_mode == "pre_trained" and pre_trained_model_path:
-        pre_trained_model = GPT(model_config)
+        pre_trained_model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=3, n_head=12, n_embd=768)
+        pre_trained_model = GPT(pre_trained_model_config)
         state_dict = torch.load(pre_trained_model_path)
 
         # Remove the "_orig_mod." prefix from the keys in the state_dict
@@ -350,6 +330,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         decay_ratio = (it - warmup_iters) / (num_iterations - warmup_iters)
         assert 0 <= decay_ratio <= 1
         return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * learning_rate
+
+    def get_gamma(it):
+        if it >= gamma_decay_batches:
+            return 0.0
+        decay_ratio = it / gamma_decay_batches
+        return initial_gamma * (1 - decay_ratio)
 
     run_id = str(uuid.uuid4())
 
@@ -385,12 +371,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         with ctx:
             output, initial_loss = model(x, y, return_logits=True)
 
-            if distillation_mode == "pre_trained" and pre_trained_model_path:
+            if pre_trained_model is not None and step < gamma_decay_batches:
                 with torch.no_grad():
                     pre_trained_output, _ = pre_trained_model(x)
                 out = pre_trained_output.transpose(2, 1).detach()
                 outp = F.softmax(out, dim=1)
                 distill_loss = F.cross_entropy(output.transpose(2, 1), outp, reduction='mean')
+                gamma = get_gamma(step)
                 loss = (1 - gamma) * initial_loss + gamma * distill_loss
             else:
                 loss = initial_loss  # Handle the case where no distillation is applied
@@ -427,6 +414,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
             timings.append(t1-t0)
+
+        # Discard the pre-trained model from memory after gamma decay batches
+        if pre_trained_model is not None and step == gamma_decay_batches - 1:
+            del pre_trained_model
+            torch.cuda.empty_cache()
+            print("Pre-trained model discarded from memory.")
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
