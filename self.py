@@ -288,6 +288,15 @@ def get_layer_depth(batch_num, num_batches, depth):
         [0.1, 0.2, 0.3, 0.4],
         [0.0, 0.1, 0.2, 0.7]  
     ]
+
+    # # 4 lists of weights with all 0.25s
+    # weights = [
+    #     [0.25, 0.25, 0.25, 0.25],
+    #     [0.25, 0.25, 0.25, 0.25],
+    #     [0.25, 0.25, 0.25, 0.25],
+    #     [0.25, 0.25, 0.25, 0.25]
+    # ]
+
     # Safeguard against the ratio exactly equalling 1.0
     phase_index = next((i for i, phase in enumerate(phases) if batch_num / num_batches <= phase), len(phases) - 1)
     current_weights = weights[phase_index]
@@ -380,21 +389,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
 
-    quarter_depth = depth // 4
-    batch_size_by_depth = {
-        quarter_depth: batch_size,
-        2 * quarter_depth: batch_size,
-        3 * quarter_depth: batch_size,
-        depth: batch_size
-    }
-
-    lr_by_depth = {
-        quarter_depth: learning_rate,
-        2 * quarter_depth: learning_rate,
-        3 * quarter_depth: learning_rate,
-        depth: learning_rate
-    }
-
     for step in range(num_iterations + 1):
         t0 = time.time()
         last_step = (step == num_iterations)
@@ -424,11 +418,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model.train()
         # Get the current depth for the forward pass
         current_depth = get_layer_depth(step, num_iterations, depth)
-        B = batch_size_by_depth[current_depth]
-        learning_rate = lr_by_depth[current_depth]
-
-        # Update batch size of train_loader
-        train_loader.update_batch_size(B)
+        B = batch_size
 
         # forward pass
         forward_start = time.time()  # Start timing for forward pass
@@ -476,6 +466,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "batch_time": t1-t0,
             "forward_time": forward_time,
             "backward_time": backward_time,
+            "current_depth": current_depth,
         })  # Log training loss and instances seen to wandb
 
         # keep track of smooth timings, last 20 iterations
