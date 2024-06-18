@@ -289,14 +289,6 @@ def get_layer_depth(batch_num, num_batches, depth):
         [0.0, 0.1, 0.2, 0.7]  
     ]
 
-    # # 4 lists of weights with all 0.25s
-    # weights = [
-    #     [0.25, 0.25, 0.25, 0.25],
-    #     [0.25, 0.25, 0.25, 0.25],
-    #     [0.25, 0.25, 0.25, 0.25],
-    #     [0.25, 0.25, 0.25, 0.25]
-    # ]
-
     # Safeguard against the ratio exactly equalling 1.0
     phase_index = next((i for i, phase in enumerate(phases) if batch_num / num_batches <= phase), len(phases) - 1)
     current_weights = weights[phase_index]
@@ -416,16 +408,19 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
+
+        start_pick = time.time()
         # Get the current depth for the forward pass
         current_depth = get_layer_depth(step, num_iterations, depth)
-        B = batch_size
+        end_pick = time.time()
+        pick_time = end_pick - start_pick
 
         # forward pass
-        forward_start = time.time()  # Start timing for forward pass
+        forward_start = time.time()
         with ctx:
             _, loss = model(x, current_depth, y, return_logits=False)
-        forward_end = time.time()  # End timing for forward pass
-        forward_time = forward_end - forward_start  # Calculate forward pass time
+        forward_end = time.time()
+        forward_time = forward_end - forward_start
 
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
@@ -446,8 +441,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # step the optimizer
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
-        backward_end = time.time()  # End timing for backward pass
-        backward_time = backward_end - backward_start  # Calculate backward pass time
+        backward_end = time.time()
+        backward_time = backward_end - backward_start
         
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
@@ -466,6 +461,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "batch_time": t1-t0,
             "forward_time": forward_time,
             "backward_time": backward_time,
+            "layer_pick_time": pick_time,
             "current_depth": current_depth,
         })  # Log training loss and instances seen to wandb
 

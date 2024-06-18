@@ -356,10 +356,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
         # forward pass
-        t_forward_start = time.time()
+        forward_start = time.time()
         with ctx:
             _, loss = model(x, y, return_logits=False)
-        t_forward_end = time.time()
+        forward_end = time.time()
+        forward_time = forward_end - forward_start
 
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
@@ -367,9 +368,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         instances_seen += x.size(0)
 
         # backward pass
-        t_backward_start = time.time()
+        backward_start = time.time()
         loss.backward()
-        t_backward_end = time.time()
 
         for p in model.parameters():
             p.grad = p.grad / (p.grad.norm() + 1e-6)
@@ -380,7 +380,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # step the optimizer
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
-        t_backward_end = time.time()
+        backward_end = time.time()
+        backward_time = backward_end - backward_start
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
@@ -396,8 +397,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "step": step, 
             "instances_seen": instances_seen,
             "batch_time": t1 - t0,
-            "forward_time": t_forward_end - t_forward_start,
-            "backward_time": t_backward_end - t_backward_start,
+            "forward_time": forward_time,
+            "backward_time": backward_time
         })  # Log training loss, instances seen, and timings to wandb
 
         # keep track of smooth timings, last 20 iterations
