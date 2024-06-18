@@ -151,22 +151,6 @@ class GPT(nn.Module):
             elif i == dist_points[3]:
                 dist_output_4th = x
 
-
-        # Apply the distillation layer for the current depth
-        # x = rmsnorm(x)
-
-        for i, block in enumerate(self.transformer.h[:current_depth]):
-            x = block(x)
-
-            if i == dist_points[0]:
-                dist_output_1st = x
-            elif i == dist_points[1]:
-                dist_output_2nd = x
-            elif i == dist_points[2]:
-                dist_output_3rd = x
-            elif i == dist_points[3]:
-                dist_output_4th = x
-
         # Determine the deepest available distillation output
         if dist_output_4th is not None:
             y = self.distill_layers[3](dist_output_4th)
