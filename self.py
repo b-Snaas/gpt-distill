@@ -431,13 +431,19 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         train_loader.update_batch_size(B)
 
         # forward pass
+        forward_start = time.time()  # Start timing for forward pass
         with ctx:
             _, loss = model(x, current_depth, y, return_logits=False)
+        forward_end = time.time()  # End timing for forward pass
+        forward_time = forward_end - forward_start  # Calculate forward pass time
+
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
         # Increment the counter for instances seen
         instances_seen += x.size(0)
+        
         # backward pass
+        backward_start = time.time()  # Start timing for backward pass
         loss.backward()
         for layer in model.transformer.h[:current_depth]:
             for p in layer.parameters():
@@ -450,6 +456,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # step the optimizer
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
+        backward_end = time.time()  # End timing for backward pass
+        backward_time = backward_end - backward_start  # Calculate backward pass time
+        
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
@@ -460,7 +469,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
         # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
-        wandb.log({"train_loss": lossf, "step": step, "instances_seen": instances_seen})  # Log training loss and instances seen to wandb
+        wandb.log({
+            "train_loss": lossf,
+            "step": step,
+            "instances_seen": instances_seen,
+            "batch_time": t1-t0,
+            "forward_time": forward_time,
+            "backward_time": backward_time,
+        })  # Log training loss and instances seen to wandb
 
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:

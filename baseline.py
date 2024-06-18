@@ -245,7 +245,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             model_path= None, 
             model="d12", 
             batch_size=64, 
-            sequence_length=1024, 
+            sequence_length=512, 
             num_iterations=12288, 
             learning_rate=0.0018, 
             warmup_iters=256, 
@@ -356,14 +356,21 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
         # forward pass
+        t_forward_start = time.time()
         with ctx:
             _, loss = model(x, y, return_logits=False)
+        t_forward_end = time.time()
+
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
         # Increment the counter for instances seen
         instances_seen += x.size(0)
+
         # backward pass
+        t_backward_start = time.time()
         loss.backward()
+        t_backward_end = time.time()
+
         for p in model.parameters():
             p.grad = p.grad / (p.grad.norm() + 1e-6)
         # determine and set the learning rate for this iteration
@@ -373,6 +380,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # step the optimizer
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
+        t_backward_end = time.time()
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
@@ -383,7 +391,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
         # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
-        wandb.log({"train_loss": lossf, "step": step, "instances_seen": instances_seen})  # Log training loss and instances seen to wandb
+        wandb.log({
+            "train_loss": lossf, 
+            "step": step, 
+            "instances_seen": instances_seen,
+            "batch_time": t1 - t0,
+            "forward_time": t_forward_end - t_forward_start,
+            "backward_time": t_backward_end - t_backward_start,
+        })  # Log training loss, instances seen, and timings to wandb
 
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
