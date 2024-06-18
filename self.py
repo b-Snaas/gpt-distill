@@ -405,10 +405,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     }
 
     lr_by_depth = {
-        quarter_depth: 0.00018,
-        2 * quarter_depth: 0.00018,
-        3 * quarter_depth: 0.00018,
-        depth: 0.00018
+        quarter_depth: learning_rate,
+        2 * quarter_depth: learning_rate,
+        3 * quarter_depth: learning_rate,
+        depth: learning_rate
     }
 
     for step in range(num_iterations + 1):
