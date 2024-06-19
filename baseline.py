@@ -362,10 +362,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         forward_end = time.time()
         forward_time = forward_end - forward_start
 
+        start_batch = time.time() 
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
         # Increment the counter for instances seen
         instances_seen += x.size(0)
+        end_batch = time.time()
+        batch_time = end_batch - start_batch
 
         # backward pass
         backward_start = time.time()
@@ -385,7 +388,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
+        start_cuda_sync = time.time()
         torch.cuda.synchronize()
+        end_cuda_sync = time.time()
+        cuda_sync_time = end_cuda_sync - start_cuda_sync
         # time and print
         t1 = time.time()
         # the 0th iteration is often an outlier (much slower) => skip logging it
@@ -398,7 +404,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "instances_seen": instances_seen,
             "batch_time": t1 - t0,
             "forward_time": forward_time,
-            "backward_time": backward_time
+            "backward_time": backward_time,
+            "cuda_sync_time": cuda_sync_time,
+            "batch_time": batch_time
         })  # Log training loss, instances seen, and timings to wandb
 
         # keep track of smooth timings, last 20 iterations
