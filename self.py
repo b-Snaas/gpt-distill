@@ -128,56 +128,44 @@ class GPT(nn.Module):
         x = tok_emb + pos_emb
 
         # Calculate the distillation index based on the current depth
-        # Explicitly convert to integer and handle potential division by zero
         num_blocks = len(self.transformer.h)
+        quarter_depth = num_blocks // 4
+        dist_points = [quarter_depth - 1, (quarter_depth * 2) - 1, (quarter_depth * 3) - 1, (quarter_depth * 4) - 1]
 
-        quarter_depth = len(self.transformer.h) // 4
-        dist_points = [quarter_depth - 1, (quarter_depth * 2) - 1, (quarter_depth * 3) - 1 , (quarter_depth * 4) - 1]
-
-        dist_output_1st = None
-        dist_output_2nd = None
-        dist_output_3rd = None
-        dist_output_4th = None
-
+        # Forward through the blocks
+        block_outputs = []
         for i, block in enumerate(self.transformer.h[:current_depth]):
             x = block(x)
+            block_outputs.append(x)
 
-            if i == dist_points[0]:
-                dist_output_1st = x
-            elif i == dist_points[1]:
-                dist_output_2nd = x
-            elif i == dist_points[2]:
-                dist_output_3rd = x
-            elif i == dist_points[3]:
-                dist_output_4th = x
+        # Capture the outputs at the distillation points
+        dist_outputs = [block_outputs[dp] if dp < current_depth else None for dp in dist_points]
 
         # Determine the deepest available distillation output
-        if dist_output_4th is not None:
-            y = self.distill_layers[3](dist_output_4th)
-        elif dist_output_3rd is not None:
-            y = self.distill_layers[2](dist_output_3rd)
-        elif dist_output_2nd is not None:
-            y = self.distill_layers[1](dist_output_2nd)
-        elif dist_output_1st is not None:
-            y = self.distill_layers[0](dist_output_1st)
+        y = None
+        for dist_output, distill_layer in zip(reversed(dist_outputs), reversed(self.distill_layers)):
+            if dist_output is not None:
+                y = distill_layer(dist_output)
+                break
+
+        if y is not None:
+            y = rmsnorm(y)
+            logits = y
+
+            # Calculate the loss for the current depth if targets are provided
+            if targets is not None:
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            else:
+                loss = None
+
+            # If not returning logits, set logits to None
+            if not return_logits:
+                logits = None
         else:
-            y = None
-
-        y = rmsnorm(y)
-        logits = y
-
-        # Calculate the loss for the current depth if targets are provided
-        if targets is not None and logits is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            loss = None
-
-        # If not returning logits, set logits to None
-        if not return_logits:
-            logits = None
+            logits, loss = None, None
 
         return logits, loss
-        
+
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
@@ -381,6 +369,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
 
+    current_depth = get_layer_depth(0, num_iterations, depth)
+    depth_counter = 0  # Initialize a counter to track number of batches at current depth
+
     for step in range(num_iterations + 1):
         t0 = time.time()
         last_step = (step == num_iterations)
@@ -395,7 +386,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    current_depth = get_layer_depth(step, num_iterations, depth)
                     _, loss = model(x_val, current_depth, y_val, return_logits=False)
                     val_loss += loss.item()
                 val_loss /= val_max_steps
@@ -409,19 +399,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
 
-        start_pick = time.time()
-        # Get the current depth for the forward pass
-        current_depth = get_layer_depth(step, num_iterations, depth)
-        end_pick = time.time()
-        pick_time = end_pick - start_pick
-
         # forward pass
         forward_start = time.time()
         with ctx:
             _, loss = model(x, current_depth, y, return_logits=False)
         forward_end = time.time()
         forward_time = forward_end - forward_start
-
 
         start_batch = time.time() 
         # advance the dataset for the next batch
@@ -468,11 +451,16 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "batch_time": t1-t0,
             "forward_time": forward_time,
             "backward_time": backward_time,
-            "layer_pick_time": pick_time,
             "batch_time": batch_time,
             "cuda_sync_time": cuda_sync_time,
             "current_depth": current_depth,
         })  # Log training loss and instances seen to wandb
+
+        # Update depth every 10 batches
+        depth_counter += 1
+        if depth_counter >= 10:
+            current_depth = get_layer_depth(step, num_iterations, depth)
+            depth_counter = 0
 
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
