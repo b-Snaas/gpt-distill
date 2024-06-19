@@ -107,9 +107,6 @@ class GPT(nn.Module):
         self.lm_head.LLMC_SKIP_INIT = 1 # don't init this one, we will tie weights
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
-        # Additional layers for distillation outputs
-        self.distill_layers = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size, bias=False) for _ in range(4)])
-
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -132,23 +129,37 @@ class GPT(nn.Module):
         quarter_depth = num_blocks // 4
         dist_points = [quarter_depth - 1, (quarter_depth * 2) - 1, (quarter_depth * 3) - 1, (quarter_depth * 4) - 1]
 
-        # Forward through the blocks
-        block_outputs = []
+        dist_output_1st = None
+        dist_output_2nd = None
+        dist_output_3rd = None
+        dist_output_4th = None
+
         for i, block in enumerate(self.transformer.h[:current_depth]):
             x = block(x)
-            block_outputs.append(x)
 
-        # Capture the outputs at the distillation points
-        dist_outputs = [block_outputs[dp] if dp < current_depth else None for dp in dist_points]
+            if i == dist_points[0]:
+                dist_output_1st = x
+            elif i == dist_points[1]:
+                dist_output_2nd = x
+            elif i == dist_points[2]:
+                dist_output_3rd = x
+            elif i == dist_points[3]:
+                dist_output_4th = x
 
         # Determine the deepest available distillation output
-        y = None
-        for dist_output, distill_layer in zip(reversed(dist_outputs), reversed(self.distill_layers)):
-            if dist_output is not None:
-                y = distill_layer(dist_output)
-                break
+        if dist_output_4th is not None:
+            y = dist_output_4th
+        elif dist_output_3rd is not None:
+            y = dist_output_3rd
+        elif dist_output_2nd is not None:
+            y = dist_output_2nd
+        elif dist_output_1st is not None:
+            y = dist_output_1st
+        else:
+            y = None
 
         if y is not None:
+            y = self.lm_head(y)
             y = rmsnorm(y)
             logits = y
 
@@ -165,7 +176,6 @@ class GPT(nn.Module):
             logits, loss = None, None
 
         return logits, loss
-
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
