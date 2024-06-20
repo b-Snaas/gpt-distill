@@ -394,8 +394,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                         backward_end = time.time()
                         backward_time = backward_end - backward_start
 
-                print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-                print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=10))
+                # Save the profiler outputs to log files
+                with open("/home/bsnaas/git/gpt-distill/logs/baseline_cuda_time.txt", "a") as cuda_log_file:
+                    cuda_log_file.write(prof.key_averages().table(sort_by="cuda_time_total"))
+                    cuda_log_file.write("\n\n")
+
+                with open("/home/bsnaas/git/gpt-distill/logs/baseline_memory_usage.txt", "a") as cpu_mem_log_file:
+                    cpu_mem_log_file.write(prof.key_averages().table(sort_by="self_cpu_memory_usage"))
+                    cpu_mem_log_file.write("\n\n")
+
             except Exception as e:
                 print(f"Profiler error at step {step}: {e}")
         else:
