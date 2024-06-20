@@ -14,6 +14,7 @@ import torch._inductor.config as config
 
 import fire
 import wandb
+from torch.profiler import profile, ProfilerActivity, record_function
 
 torch.set_float32_matmul_precision('high')
 
@@ -410,38 +411,77 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
 
-        # forward pass
-        forward_start = time.time()
-        with ctx:
-            _, loss = model(x, current_depth, y, return_logits=False)
-        forward_end = time.time()
-        forward_time = forward_end - forward_start
+        # Profile the training step every 100 steps
+        if step % 100 == 0:
+            with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
+                with record_function("model_training"):
+                    # forward pass
+                    forward_start = time.time()
+                    with ctx:
+                        _, loss = model(x, current_depth, y, return_logits=False)
+                    forward_end = time.time()
+                    forward_time = forward_end - forward_start
 
-        start_batch = time.time() 
-        # advance the dataset for the next batch
-        x, y = train_loader.next_batch()
-        # Increment the counter for instances seen
-        instances_seen += x.size(0)
-        end_batch = time.time()
-        batch_time = end_batch - start_batch
-        
-        # backward pass
-        backward_start = time.time()  # Start timing for backward pass
-        loss.backward()
-        for layer in model.transformer.h[:current_depth]:
-            for p in layer.parameters():
-                if p.grad is not None:
-                    p.grad = p.grad / (p.grad.norm() + 1e-6)
-        # determine and set the learning rate for this iteration
-        lr = get_lr(step)
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-        # step the optimizer
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-        backward_end = time.time()
-        backward_time = backward_end - backward_start
-        
+                    start_batch = time.time()
+                    # advance the dataset for the next batch
+                    x, y = train_loader.next_batch()
+                    # Increment the counter for instances seen
+                    instances_seen += x.size(0)
+                    end_batch = time.time()
+                    batch_time = end_batch - start_batch
+
+                    # backward pass
+                    backward_start = time.time()  # Start timing for backward pass
+                    loss.backward()
+                    for layer in model.transformer.h[:current_depth]:
+                        for p in layer.parameters():
+                            if p.grad is not None:
+                                p.grad = p.grad / (p.grad.norm() + 1e-6)
+                    # determine and set the learning rate for this iteration
+                    lr = get_lr(step)
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = lr
+                    # step the optimizer
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                    backward_end = time.time()
+                    backward_time = backward_end - backward_start
+
+                    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+                    print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=10))
+        else:
+            # forward pass
+            forward_start = time.time()
+            with ctx:
+                _, loss = model(x, current_depth, y, return_logits=False)
+            forward_end = time.time()
+            forward_time = forward_end - forward_start
+
+            start_batch = time.time() 
+            # advance the dataset for the next batch
+            x, y = train_loader.next_batch()
+            # Increment the counter for instances seen
+            instances_seen += x.size(0)
+            end_batch = time.time()
+            batch_time = end_batch - start_batch
+            
+            # backward pass
+            backward_start = time.time()  # Start timing for backward pass
+            loss.backward()
+            for layer in model.transformer.h[:current_depth]:
+                for p in layer.parameters():
+                    if p.grad is not None:
+                        p.grad = p.grad / (p.grad.norm() + 1e-6)
+            # determine and set the learning rate for this iteration
+            lr = get_lr(step)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
+            # step the optimizer
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            backward_end = time.time()
+            backward_time = backward_end - backward_start
+            
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
@@ -462,7 +502,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "batch_time": t1-t0,
             "forward_time": forward_time,
             "backward_time": backward_time,
-            "batch_time": batch_time,
+            "batch_process_time": batch_time,
             "cuda_sync_time": cuda_sync_time,
             "current_depth": current_depth,
         })  # Log training loss and instances seen to wandb
