@@ -444,10 +444,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
-        start_cuda_sync = time.time()
-        torch.cuda.synchronize()
-        end_cuda_sync = time.time()
-        cuda_sync_time = end_cuda_sync - start_cuda_sync
         # time and print
         t1 = time.time()
         # the 0th iteration is often an outlier (much slower) => skip logging it
@@ -462,7 +458,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "forward_time": forward_time,
             "backward_time": backward_time,
             "batch_time": batch_time,
-            "cuda_sync_time": cuda_sync_time,
             "current_depth": current_depth,
         })  # Log training loss and instances seen to wandb
 
