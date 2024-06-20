@@ -120,7 +120,8 @@ class GPT(nn.Module):
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # shape (t)
 
         # Forward the GPT model
-        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+        with torch.no_grad():
+            tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
         x = tok_emb + pos_emb
 
@@ -444,6 +445,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
+        start_cuda_sync = time.time()
+        torch.cuda.synchronize()
+        end_cuda_sync = time.time()
+        cuda_sync_time = end_cuda_sync - start_cuda_sync
         # time and print
         t1 = time.time()
         # the 0th iteration is often an outlier (much slower) => skip logging it
@@ -458,6 +463,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "forward_time": forward_time,
             "backward_time": backward_time,
             "batch_time": batch_time,
+            "cuda_sync_time": cuda_sync_time,
             "current_depth": current_depth,
         })  # Log training loss and instances seen to wandb
 
