@@ -360,41 +360,44 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         
         # Profile the training step every 100 steps
         if step % 100 == 0:
-            with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
-                with record_function("model_training"):
-                    # forward pass
-                    forward_start = time.time()
-                    with ctx:
-                        _, loss = model(x, y, return_logits=False)
-                    forward_end = time.time()
-                    forward_time = forward_end - forward_start
+            try:
+                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
+                    with record_function("model_training"):
+                        # forward pass
+                        forward_start = time.time()
+                        with ctx:
+                            _, loss = model(x, y, return_logits=False)
+                        forward_end = time.time()
+                        forward_time = forward_end - forward_start
 
-                    start_batch = time.time()
-                    # advance the dataset for the next batch
-                    x, y = train_loader.next_batch()
-                    # Increment the counter for instances seen
-                    instances_seen += x.size(0)
-                    end_batch = time.time()
-                    batch_time = end_batch - start_batch
+                        start_batch = time.time()
+                        # advance the dataset for the next batch
+                        x, y = train_loader.next_batch()
+                        # Increment the counter for instances seen
+                        instances_seen += x.size(0)
+                        end_batch = time.time()
+                        batch_time = end_batch - start_batch
 
-                    # backward pass
-                    backward_start = time.time()
-                    loss.backward()
+                        # backward pass
+                        backward_start = time.time()
+                        loss.backward()
 
-                    for p in model.parameters():
-                        p.grad = p.grad / (p.grad.norm() + 1e-6)
-                    # determine and set the learning rate for this iteration
-                    lr = get_lr(step)
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = lr
-                    # step the optimizer
-                    optimizer.step()
-                    optimizer.zero_grad(set_to_none=True)
-                    backward_end = time.time()
-                    backward_time = backward_end - backward_start
+                        for p in model.parameters():
+                            p.grad = p.grad / (p.grad.norm() + 1e-6)
+                        # determine and set the learning rate for this iteration
+                        lr = get_lr(step)
+                        for param_group in optimizer.param_groups:
+                            param_group['lr'] = lr
+                        # step the optimizer
+                        optimizer.step()
+                        optimizer.zero_grad(set_to_none=True)
+                        backward_end = time.time()
+                        backward_time = backward_end - backward_start
 
-                    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-                    print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=10))
+                print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+                print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=10))
+            except Exception as e:
+                print(f"Profiler error at step {step}: {e}")
         else:
             # forward pass
             forward_start = time.time()
