@@ -347,9 +347,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     model = model.train().cuda()
     if hasattr(config, "coordinate_descent_tuning"):
         config.coordinate_descent_tuning = True # suggested by @Chillee
-    print0("compiling the model...")
-
-    model = torch.compile(model)
 
     # load tokens
     train_loader = DataLoader(input_bin, B, T)
