@@ -288,10 +288,20 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         val_loader = DataLoader(input_val_bin, B, T)
     x, y = train_loader.next_batch()
 
-    def initialize_model(depth):
+    def initialize_model(depth, prev_model=None):
         model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=8, n_embd=768)
         model = GPT(model_config)
         model = model.train().cuda()
+        
+        # Transfer weights from the previous model if it exists
+        if prev_model is not None:
+            with torch.no_grad():
+                for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
+                    model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
+                model.transformer.wte.weight.copy_(prev_model.transformer.wte.weight)
+                model.transformer.wpe.weight.copy_(prev_model.transformer.wpe.weight)
+                model.lm_head.weight.copy_(prev_model.lm_head.weight)
+                
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
@@ -332,10 +342,18 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_depth, new_iters = progressive_schedule.pop(0)
                 current_iters += new_iters
 
-                # Initialize the new model and optimizer
-                model = initialize_model(current_depth)
+                # Free up the memory used by the old model and optimizer
+                prev_model = model
+                del optimizer
+                torch.cuda.empty_cache()
+
+                # Initialize the new model with weights from the previous model
+                model = initialize_model(current_depth, prev_model)
                 optimizer = reinitialize_optimizer(model, learning_rate, weight_decay)
                 raw_model = model
+
+                # Delete the previous model to free memory
+                del prev_model
 
         t0 = time.time()
 
@@ -429,6 +447,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Save the model at the end of training
     if model_path:
         save_model(model, model_path)
+
+if __name__ == "__main__":
+    fire.Fire(train)
+
 
 if __name__ == "__main__":
     fire.Fire(train)
