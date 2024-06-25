@@ -311,6 +311,16 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # progressive training schedule
     progressive_schedule = [(3, 10000), (6, 20000), (9, 30000), (12, 40000)]
 
+    # Calculate total iterations in the progressive schedule
+    total_scheduled_iters = sum(iters for _, iters in progressive_schedule)
+
+    # Adjust the schedule if num_iterations is larger
+    if num_iterations > total_scheduled_iters:
+        last_depth = progressive_schedule[-1][0]
+        extra_iters = num_iterations - total_scheduled_iters
+        progressive_schedule.append((last_depth, extra_iters))
+
+
     # initialize the first model and optimizer
     current_depth, current_iters = progressive_schedule.pop(0)
     model = initialize_model(current_depth)
@@ -447,10 +457,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Save the model at the end of training
     if model_path:
         save_model(model, model_path)
-
-if __name__ == "__main__":
-    fire.Fire(train)
-
 
 if __name__ == "__main__":
     fire.Fire(train)
