@@ -287,7 +287,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
      # init the model from scratch
     model_config = {
         "d3": GPTConfig(block_size=1024, vocab_size=50257, n_layer=3, n_head=8, n_embd=128),
-        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=8, n_embd=120),
+        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=8, n_embd=360),
         "d24": GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024),
         "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),
         "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),
@@ -354,84 +354,36 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
         
-        # Profile the training step every 100 steps
-        if step % 100 == 0:
-            try:
-                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
-                    with record_function("model_training"):
-                        # forward pass
-                        forward_start = time.time()
-                        with ctx:
-                            _, loss = model(x, y, return_logits=False)
-                        forward_end = time.time()
-                        forward_time = forward_end - forward_start
+        # forward pass
+        forward_start = time.time()
+        with ctx:
+            _, loss = model(x, y, return_logits=False)
+        forward_end = time.time()
+        forward_time = forward_end - forward_start
 
-                        start_batch = time.time()
-                        # advance the dataset for the next batch
-                        x, y = train_loader.next_batch()
-                        # Increment the counter for instances seen
-                        instances_seen += x.size(0)
-                        end_batch = time.time()
-                        batch_time = end_batch - start_batch
+        start_batch = time.time() 
+        # advance the dataset for the next batch
+        x, y = train_loader.next_batch()
+        # Increment the counter for instances seen
+        instances_seen += x.size(0)
+        end_batch = time.time()
+        batch_time = end_batch - start_batch
 
-                        # backward pass
-                        backward_start = time.time()
-                        loss.backward()
+        # backward pass
+        backward_start = time.time()
+        loss.backward()
 
-                        for p in model.parameters():
-                            p.grad = p.grad / (p.grad.norm() + 1e-6)
-                        # determine and set the learning rate for this iteration
-                        lr = get_lr(step)
-                        for param_group in optimizer.param_groups:
-                            param_group['lr'] = lr
-                        # step the optimizer
-                        optimizer.step()
-                        optimizer.zero_grad(set_to_none=True)
-                        backward_end = time.time()
-                        backward_time = backward_end - backward_start
-
-                # Save the profiler outputs to log files
-                with open("/home/bsnaas/git/gpt-distill/logs/baseline_cuda_time.txt", "a") as cuda_log_file:
-                    cuda_log_file.write(prof.key_averages().table(sort_by="cuda_time_total"))
-                    cuda_log_file.write("\n\n")
-
-                with open("/home/bsnaas/git/gpt-distill/logs/baseline_memory_usage.txt", "a") as cpu_mem_log_file:
-                    cpu_mem_log_file.write(prof.key_averages().table(sort_by="self_cpu_memory_usage"))
-                    cpu_mem_log_file.write("\n\n")
-
-            except Exception as e:
-                print(f"Profiler error at step {step}: {e}")
-        else:
-            # forward pass
-            forward_start = time.time()
-            with ctx:
-                _, loss = model(x, y, return_logits=False)
-            forward_end = time.time()
-            forward_time = forward_end - forward_start
-
-            start_batch = time.time() 
-            # advance the dataset for the next batch
-            x, y = train_loader.next_batch()
-            # Increment the counter for instances seen
-            instances_seen += x.size(0)
-            end_batch = time.time()
-            batch_time = end_batch - start_batch
-
-            # backward pass
-            backward_start = time.time()
-            loss.backward()
-
-            for p in model.parameters():
-                p.grad = p.grad / (p.grad.norm() + 1e-6)
-            # determine and set the learning rate for this iteration
-            lr = get_lr(step)
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-            # step the optimizer
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-            backward_end = time.time()
-            backward_time = backward_end - backward_start
+        for p in model.parameters():
+            p.grad = p.grad / (p.grad.norm() + 1e-6)
+        # determine and set the learning rate for this iteration
+        lr = get_lr(step)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+        # step the optimizer
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        backward_end = time.time()
+        backward_time = backward_end - backward_start
 
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
