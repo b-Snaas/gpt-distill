@@ -309,7 +309,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         return optimizer
 
     # progressive training schedule
-    progressive_schedule = [(3, 10000), (6, 20000), (9, 30000), (12, 40000)]
+    progressive_schedule = [(6, 20000), (12, 40000), (18, 60000), (24, 80000)]
 
     # Calculate total iterations in the progressive schedule
     total_scheduled_iters = sum(iters for _, iters in progressive_schedule)
@@ -360,8 +360,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Initialize the new model with weights from the previous model
                 model = initialize_model(current_depth, prev_model)
                 optimizer = reinitialize_optimizer(model, learning_rate, weight_decay)
-                raw_model = model
-
+                
                 # Delete the previous model to free memory
                 del prev_model
 
