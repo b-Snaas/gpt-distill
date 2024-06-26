@@ -411,8 +411,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         backward_start = time.time()
         loss.backward()
 
+        # Gradient normalization
         for p in model.parameters():
-            p.grad = p.grad / (p.grad.norm() + 1e-6)
+            if p.grad is not None:
+                p.grad = p.grad / (p.grad.norm() + 1e-6)
         # determine and set the learning rate for this iteration
         lr = get_lr(step, num_iterations)
         for param_group in optimizer.param_groups:
