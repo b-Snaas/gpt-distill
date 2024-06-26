@@ -288,7 +288,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     x, y = train_loader.next_batch()
 
     def initialize_model(depth, prev_model=None):
-        model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=25, n_embd=1600)
+        model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=20, n_embd=1480)
         model = GPT(model_config)
         model = model.train().cuda()
         
@@ -311,7 +311,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         return optimizer
 
     # progressive training schedule
-    progressive_schedule = [(6, 20000), (24, 20000)]
+    progressive_schedule = [(12, 40000), (48, 80000)]
 
     # Calculate total iterations in the progressive schedule
     total_scheduled_iters = sum(iters for _, iters in progressive_schedule)
