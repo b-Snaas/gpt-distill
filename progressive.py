@@ -106,8 +106,8 @@ class GPT(nn.Module):
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.lm_head.LLMC_SKIP_INIT = 1 # don't init this one, we will tie weights
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        self.lm_head.LLMC_SKIP_INIT = 1
+        self.transformer.wte.weight = self.lm_head.weight
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -147,11 +147,6 @@ class GPT(nn.Module):
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
         return optimizer
-
-    def print_network_depth(self):
-        depth = len(self.transformer.h)
-        print(f"Network depth (number of layers): {depth}")
-        return depth
 
 # -----------------------------------------------------------------------------
 # Our own simple Data Loader
@@ -235,12 +230,6 @@ def print0(*args, **kwargs):
     # if this is not a distributed run, it's just a print
     print(*args, **kwargs)
 
-def save_model(model, path):
-    # Ensure the directory exists
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    torch.save(model.state_dict(), path)
-    print(f"Model saved to {path}")
-
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path=None, 
@@ -309,7 +298,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         return optimizer
 
     # progressive training schedule
-    progressive_schedule = [(6, 20000), (12, 40000), (18, 60000), (24, 80000)]
+    progressive_schedule = [(6, 40000), (24, 80000)]
 
     # Calculate total iterations in the progressive schedule
     total_scheduled_iters = sum(iters for _, iters in progressive_schedule)
@@ -338,8 +327,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         decay_ratio = (it - warmup_iters) / (total_iters - warmup_iters)
         assert 0 <= decay_ratio <= 1
         return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * learning_rate
-
-    run_id = str(uuid.uuid4())
 
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
@@ -452,10 +439,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = timings[-20:]
     print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
-
-    # Save the model at the end of training
-    if model_path:
-        save_model(model, model_path)
 
 if __name__ == "__main__":
     fire.Fire(train)
