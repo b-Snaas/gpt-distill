@@ -95,7 +95,6 @@ class GPTConfig:
     n_embd: int = 768
 
 class GPT(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -108,21 +107,30 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_head.LLMC_SKIP_INIT = 1
         self.transformer.wte.weight = self.lm_head.weight
+
+        # Add student embedding and lm_head
+        self.student_wte = nn.Embedding(config.vocab_size, config.n_embd)
+        self.student_lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.student_lm_head.LLMC_SKIP_INIT = 1
+        self.student_wte.weight = self.student_lm_head.weight
+
         self.apply(self._init_weights)
 
+        # Flag to determine which embedding/lm_head pair to use
+        self.use_student = True
+
     def _init_weights(self, module):
-        # initialize the position embedding at std=0.02 to match the scale of the token embedding.
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None, return_logits=True):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
 
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+        # Use student or teacher embedding based on the flag
+        tok_emb = self.student_wte(idx) if self.use_student else self.transformer.wte(idx)
+        pos_emb = self.transformer.wpe(pos)
         x = tok_emb + pos_emb
 
         for block in self.transformer.h:
@@ -130,24 +138,30 @@ class GPT(nn.Module):
         x = rmsnorm(x)
 
         if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
+            # Use student or teacher lm_head based on the flag
+            logits = self.student_lm_head(x) if self.use_student else self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            logits = self.student_lm_head(x[:, [-1], :]) if self.use_student else self.lm_head(x[:, [-1], :])
             loss = None
 
-        # there are performance reasons why not returning logits is prudent, if not needed
         if not return_logits:
             logits = None
 
         return logits, loss
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
+        # Always optimize student parameters and shared transformer blocks
+        params_to_optimize = (
+            list(self.student_wte.parameters()) +
+            list(self.student_lm_head.parameters()) +
+            list(self.transformer.h.parameters()) +
+            list(self.transformer.wpe.parameters())
+        )
+        
+        optimizer = torch.optim.AdamW(params_to_optimize, lr=learning_rate, weight_decay=weight_decay, betas=betas)
         return optimizer
-
+        
 # -----------------------------------------------------------------------------
 # Our own simple Data Loader
 
@@ -282,15 +296,19 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model = GPT(model_config)
         model = model.train().cuda()
         
-        # Transfer weights from the previous model if it exists
         if prev_model is not None:
             with torch.no_grad():
+                # Copy previous model's student weights to new model's teacher weights
+                model.transformer.wte.weight.copy_(prev_model.student_wte.weight)
+                model.lm_head.weight.copy_(prev_model.student_lm_head.weight)
+                
+                # Copy transformer blocks
                 for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
                     model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
-                model.transformer.wte.weight.copy_(prev_model.transformer.wte.weight)
-                model.transformer.wpe.weight.copy_(prev_model.transformer.wpe.weight)
-                model.lm_head.weight.copy_(prev_model.lm_head.weight)
                 
+                # Copy position embeddings
+                model.transformer.wpe.weight.copy_(prev_model.transformer.wpe.weight)
+        
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
@@ -298,7 +316,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         return optimizer
 
     # progressive training schedule
-    progressive_schedule = [(6, 40000), (24, 80000)]
+    progressive_schedule = [(6, 20000), (12, 40000), (18, 60000), (24, 80000)]
 
     # Calculate total iterations in the progressive schedule
     total_scheduled_iters = sum(iters for _, iters in progressive_schedule)
