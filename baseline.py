@@ -287,7 +287,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
      # init the model from scratch
     model_config = {
         "d3": GPTConfig(block_size=1024, vocab_size=50257, n_layer=3, n_head=8, n_embd=128),
-        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=20, n_embd=1280),
+        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=16, n_embd=1024),
         "d24": GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024),
         "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),
         "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),
