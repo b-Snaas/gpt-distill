@@ -100,13 +100,9 @@ class GPT(nn.Module):
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.lm_head.LLMC_SKIP_INIT = 1
-        self.transformer.wte.weight = self.lm_head.weight
 
         # Add student embedding and lm_head
         self.student_wte = nn.Embedding(config.vocab_size, config.n_embd)
@@ -139,10 +135,10 @@ class GPT(nn.Module):
 
         if targets is not None:
             # Use student or teacher lm_head based on the flag
-            logits = self.student_lm_head(x) if self.use_student else self.lm_head(x)
+            logits = self.student_lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            logits = self.student_lm_head(x[:, [-1], :]) if self.use_student else self.lm_head(x[:, [-1], :])
+            logits = self.student_lm_head(x[:, [-1], :])
             loss = None
 
         if not return_logits:
@@ -292,22 +288,21 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     x, y = train_loader.next_batch()
 
     def initialize_model(depth, prev_model=None):
-        model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=8, n_embd=360)
+        model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=16, n_embd=1024)
         model = GPT(model_config)
         model = model.train().cuda()
         
         if prev_model is not None:
             with torch.no_grad():
-                # Copy previous model's student weights to new model's teacher weights
-                model.transformer.wte.weight.copy_(prev_model.student_wte.weight)
-                model.lm_head.weight.copy_(prev_model.student_lm_head.weight)
-                
                 # Copy transformer blocks
                 for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
                     model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
                 
                 # Copy position embeddings
                 model.transformer.wpe.weight.copy_(prev_model.transformer.wpe.weight)
+                # Copy student weights to new model's student weights
+                model.student_wte.weight.copy_(prev_model.student_wte.weight)
+                model.student_lm_head.weight.copy_(prev_model.student_lm_head.weight)
         
         return model
 
