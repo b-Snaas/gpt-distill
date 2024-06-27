@@ -370,8 +370,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_iters += new_iters
 
                 # Free up the memory used by the old model and optimizer
-                del model
+                prev_model = model
                 del optimizer
+
                 clear_memory()
 
                 # Initialize the new model with weights from the previous model
@@ -383,9 +384,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Delete the previous model to free memory
                 del prev_model
-                clear_memory()
 
                 current_lr = new_lr  # Update the current learning rate
+
+                clear_memory()
 
         t0 = time.time()
 
