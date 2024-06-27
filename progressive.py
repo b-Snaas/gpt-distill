@@ -120,7 +120,7 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, return_logits=True):
+    def forward(self, idx, targets=None, return_logits=True, previous_depth=None, distillation_mode=False):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
@@ -130,14 +130,35 @@ class GPT(nn.Module):
         pos_emb = self.transformer.wpe(pos)
         x = tok_emb + pos_emb
 
-        for block in self.transformer.h:
+        intermediate_logits = None
+
+        for i, block in enumerate(self.transformer.h):
             x = block(x)
+            if distillation_mode and i == previous_depth - 1:
+                intermediate_logits = self.student_lm_head(rmsnorm(x))
+
         x = rmsnorm(x)
 
         if targets is not None:
             # Use student or teacher lm_head based on the flag
             logits = self.student_lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            
+            # Reshape logits and targets for cross entropy loss
+            logits_reshaped = logits.view(-1, logits.size(-1))  # Shape: (B*T, C)
+            targets_reshaped = targets.view(-1)  # Shape: (B*T)
+            
+            loss = F.cross_entropy(logits_reshaped, targets_reshaped, ignore_index=-1)
+            
+            # Combine with previous logits loss if distillation mode is on
+            if distillation_mode:
+                intermediate_logits_reshaped = intermediate_logits.view(-1, intermediate_logits.size(-1))  # Shape: (B*T, C)
+
+                distill_loss = F.kl_div(
+                    F.log_softmax(logits_reshaped, dim=-1),
+                    F.softmax(intermediate_logits_reshaped, dim=-1),
+                    reduction='batchmean'
+                )
+                loss = (loss + distill_loss) * 0.5
         else:
             logits = self.student_lm_head(x[:, [-1], :])
             loss = None
@@ -146,6 +167,7 @@ class GPT(nn.Module):
             logits = None
 
         return logits, loss
+
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # Always optimize student parameters and shared transformer blocks
@@ -298,7 +320,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         val_loader = DataLoader(input_val_bin, B, T)
     x, y = train_loader.next_batch()
 
+    # Add a variable to track the previous validation loss, depth, and distillation mode
+    previous_val_loss = None
+    previous_depth = None
+    distillation_mode = False
+    best_val_loss = float('inf')
+
     def initialize_model(depth, prev_model=None):
+        global previous_val_loss, previous_depth, distillation_mode
         model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=16, n_embd=1024)
         model = GPT(model_config)
         model = model.train().cuda()
@@ -314,8 +343,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Copy student weights to new model's student weights
                 model.student_wte.weight.copy_(prev_model.student_wte.weight)
                 model.student_lm_head.weight.copy_(prev_model.student_lm_head.weight)
+            
+            previous_val_loss = best_val_loss  # Record the previous model's best validation loss
+            previous_depth = len(prev_model.transformer.h)  # Record the previous model's depth
+            distillation_mode = True  # Turn on distillation mode
+        else:
+            distillation_mode = False  # First model, distillation mode off
         
         return model
+
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
@@ -323,7 +359,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (1, 3000, 105, 0.003), 
+        (3, 5000, 100, 0.003), 
         (48, 50000, 20, 0.0009)
     ]
 
@@ -335,7 +371,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         last_depth, _, last_batch_size, last_lr = progressive_schedule[-1]
         extra_iters = num_iterations - total_scheduled_iters
         progressive_schedule.append((last_depth, extra_iters, last_batch_size, last_lr))
-
 
     # initialize the first model and optimizer
     current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
@@ -409,6 +444,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                     _, loss = model(x_val, y_val, return_logits=False)
                     val_loss += loss.item()
                 val_loss /= val_max_steps
+
+            # Update best validation loss
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+
+            # Turn off distillation mode if we surpass the previous best validation loss
+            if distillation_mode and val_loss < previous_val_loss:
+                distillation_mode = False
             # log to console and to file
             print0(f"val loss {val_loss}")
             wandb.log({"val_loss": val_loss, "step": step})
@@ -422,7 +465,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # forward pass
         forward_start = time.time()
         with ctx:
-            _, loss = model(x, y, return_logits=False)
+            _, loss = model(
+                x, y, 
+                return_logits=False, 
+                previous_depth=previous_depth, 
+                distillation_mode=distillation_mode
+            )
         forward_end = time.time()
         forward_time = forward_end - forward_start
 
