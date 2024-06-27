@@ -190,9 +190,9 @@ def _load_data_shard(filename):
 
 class DataLoader:
     def __init__(self, filename_pattern, B, T):
-        self.B = B
+        self.filename_pattern = filename_pattern
         self.T = T
-
+        self.set_batch_size(B)
         # glob files that match the pattern
         self.files = sorted(glob.glob(filename_pattern))
         assert len(self.files) > 0, f"did not find any files that match the pattern {filename_pattern}"
@@ -208,6 +208,9 @@ class DataLoader:
 
         # kick things off
         self.reset()
+
+    def set_batch_size(self, B):
+        self.B = B
 
     def reset(self):
         self.current_shard = 0
@@ -311,35 +314,41 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         return optimizer
 
     # progressive training schedule
-    progressive_schedule = [(12, 40000), (48, 80000)]
+    progressive_schedule = [
+        (3, 40000, 64, 0.0020), 
+        (48, 80000, 20, 0.0009)
+    ]
 
     # Calculate total iterations in the progressive schedule
-    total_scheduled_iters = sum(iters for _, iters in progressive_schedule)
+    total_scheduled_iters = sum(iters for _, iters, _, _ in progressive_schedule)
 
     # Adjust the schedule if num_iterations is larger
     if num_iterations > total_scheduled_iters:
-        last_depth = progressive_schedule[-1][0]
+        last_depth, _, last_batch_size, last_lr = progressive_schedule[-1]
         extra_iters = num_iterations - total_scheduled_iters
-        progressive_schedule.append((last_depth, extra_iters))
+        progressive_schedule.append((last_depth, extra_iters, last_batch_size, last_lr))
 
 
     # initialize the first model and optimizer
-    current_depth, current_iters = progressive_schedule.pop(0)
+    current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
     model = initialize_model(current_depth)
-    optimizer = reinitialize_optimizer(model, learning_rate, weight_decay)
+    optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
+
+    # Set the batch size for the first stage
+    train_loader.set_batch_size(current_batch_size)
 
     raw_model = model
 
     # learning rate decay scheduler
-    def get_lr(it, total_iters):
+    def get_lr(it, total_iters, current_lr):
         assert it <= total_iters
         # 1) linear warmup for warmup_iters steps
         if it < warmup_iters:
-            return learning_rate * (it + 1) / warmup_iters
+            return current_lr * (it + 1) / warmup_iters
         # 2) linear decay down to min learning rate
         decay_ratio = (it - warmup_iters) / (total_iters - warmup_iters)
         assert 0 <= decay_ratio <= 1
-        return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * learning_rate
+        return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * current_lr
 
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
@@ -349,7 +358,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         if step >= current_iters:
             if progressive_schedule:
                 # Move to the next depth stage
-                current_depth, new_iters = progressive_schedule.pop(0)
+                current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
 
                 # Free up the memory used by the old model and optimizer
@@ -359,10 +368,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Initialize the new model with weights from the previous model
                 model = initialize_model(current_depth, prev_model)
-                optimizer = reinitialize_optimizer(model, learning_rate, weight_decay)
+                optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
+                # Set the batch size for the new stage
+                train_loader.set_batch_size(new_batch_size)
+
                 # Delete the previous model to free memory
                 del prev_model
+
+                current_lr = new_lr  # Update the current learning rate
 
         t0 = time.time()
 
@@ -411,7 +425,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if p.grad is not None:
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
         # determine and set the learning rate for this iteration
-        lr = get_lr(step, num_iterations)
+        lr = get_lr(step, num_iterations, current_lr)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
