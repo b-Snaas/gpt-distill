@@ -16,6 +16,7 @@ from torch.profiler import profile, ProfilerActivity, record_function
 
 import fire
 import wandb
+import gc
 
 torch.set_float32_matmul_precision('high')
 
@@ -235,6 +236,13 @@ class DataLoader:
             self.advance()
         return x.cuda(), y.cuda()
 
+def clear_memory():
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    # Force GPU to release memory
+    torch.cuda.synchronize()
+
 # -----------------------------------------------------------------------------
 # int main
 
@@ -362,10 +370,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_iters += new_iters
 
                 # Free up the memory used by the old model and optimizer
-                prev_model = model
+                del model
                 del optimizer
-
-                torch.cuda.empty_cache()
+                clear_memory()
 
                 # Initialize the new model with weights from the previous model
                 model = initialize_model(current_depth, prev_model)
@@ -376,10 +383,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Delete the previous model to free memory
                 del prev_model
+                clear_memory()
 
                 current_lr = new_lr  # Update the current learning rate
-
-                torch.cuda.empty_cache()
 
         t0 = time.time()
 
