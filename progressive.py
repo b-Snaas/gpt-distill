@@ -323,8 +323,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 100, 100, 0.003), 
-        (48, 100, 1, 0.0009)
+        (3, 200, 100, 0.003), 
+        (48, 200, 20, 0.0009)
     ]
 
     # Calculate total iterations in the progressive schedule
@@ -361,9 +361,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
     step = 0
+    steps_in_current_schedule = 0
 
     while step < num_iterations:
-        if progressive_schedule and step >= (current_iters - 100):
+        if progressive_schedule and steps_in_current_schedule == current_iters - 100:
             next_depth, _, next_batch_size, _ = progressive_schedule[0]
             if train_loader.B != next_batch_size:
                 print0(f"Switching to next batch size {next_batch_size} at step {step}")
@@ -373,6 +374,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Move to the next depth stage
                 current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
+                steps_in_current_schedule = 0
 
                 # Free up the memory used by the old model and optimizer
                 prev_model = model
@@ -479,6 +481,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             timings.append(t1-t0)
 
         step += 1
+        steps_in_current_schedule += 1
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
