@@ -315,8 +315,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 7500, 100, 0.003), 
-        (48, 80000, 20, 0.0009)
+        (3, 100, 100, 0.003), 
+        (48, 100, 20, 0.0009)
     ]
 
     # Calculate total iterations in the progressive schedule
@@ -364,7 +364,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Free up the memory used by the old model and optimizer
                 prev_model = model
                 del optimizer
-                torch.cuda.empty_cache()
 
                 # Initialize the new model with weights from the previous model
                 model = initialize_model(current_depth, prev_model)
@@ -377,6 +376,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 del prev_model
 
                 current_lr = new_lr  # Update the current learning rate
+
+                torch.cuda.empty_cache()
 
         t0 = time.time()
 
