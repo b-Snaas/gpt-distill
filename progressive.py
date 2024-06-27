@@ -135,7 +135,7 @@ class GPT(nn.Module):
         for i, block in enumerate(self.transformer.h):
             x = block(x)
             if distillation_mode and i == previous_depth - 1:
-                intermediate_logits = self.student_lm_head(rmsnorm(x))
+                intermediate_logits = self.student_lm_head(rmsnorm(x)).detach()
 
         x = rmsnorm(x)
 
