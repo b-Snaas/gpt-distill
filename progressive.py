@@ -315,7 +315,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 40000, 64, 0.0020), 
+        (3, 40000, 100, 0.003), 
         (48, 80000, 20, 0.0009)
     ]
 
