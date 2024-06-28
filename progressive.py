@@ -143,21 +143,14 @@ class GPT(nn.Module):
             # Use student or teacher lm_head based on the flag
             logits = self.student_lm_head(x)
             
-            # Reshape logits and targets for cross entropy loss
-            logits_reshaped = logits.view(-1, logits.size(-1))  # Shape: (B*T, C)
-            targets_reshaped = targets.view(-1)  # Shape: (B*T)
-            
-            loss = F.cross_entropy(logits_reshaped, targets_reshaped, ignore_index=-1)
-            
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+
             # Combine with previous logits loss if distillation mode is on
             if distillation_mode:
-                intermediate_logits_reshaped = intermediate_logits.view(-1, intermediate_logits.size(-1))  # Shape: (B*T, C)
+                out = intermediate_logits.transpose(2, 1).detach()
+                outp = F.softmax(out, dim=1)
+                distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
 
-                distill_loss = F.kl_div(
-                    F.log_softmax(logits_reshaped, dim=-1),
-                    F.softmax(intermediate_logits_reshaped, dim=-1),
-                    reduction='batchmean'
-                )
                 loss = (loss + distill_loss) * 0.5
         else:
             logits = self.student_lm_head(x[:, [-1], :])
