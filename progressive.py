@@ -10,9 +10,6 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-import torch._inductor.config as config
-
-from torch.profiler import profile, ProfilerActivity, record_function
 
 import fire
 import wandb
@@ -111,10 +108,12 @@ class GPT(nn.Module):
         self.student_lm_head.LLMC_SKIP_INIT = 1
         self.student_wte.weight = self.student_lm_head.weight
 
-        self.apply(self._init_weights)
+        # Store previous embedding, lm_head, and positional embeddings
+        self.prev_wte = None
+        self.prev_lm_head = None
+        self.prev_wpe = None
 
-        # Flag to determine which embedding/lm_head pair to use
-        self.use_student = True
+        self.apply(self._init_weights)
 
     def _init_weights(self, module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
@@ -125,23 +124,32 @@ class GPT(nn.Module):
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
 
-        # Use student or teacher embedding based on the flag
-        tok_emb = self.student_wte(idx) if self.use_student else self.transformer.wte(idx)
+        # Use student or teacher embedding based on the flag for current run
+        current_tok_emb = self.student_wte(idx)
         pos_emb = self.transformer.wpe(pos)
-        x = tok_emb + pos_emb
+        current_x = current_tok_emb + pos_emb
 
         intermediate_logits = None
 
-        for i, block in enumerate(self.transformer.h):
-            x = block(x)
-            if distillation_mode and i == previous_depth - 1:
-                intermediate_logits = self.student_lm_head(rmsnorm(x)).detach()
+        if distillation_mode:
+            # Use the stored embedding, lm_head, and positional embeddings of the previous depth for distillation
+            with torch.no_grad():
+                prev_tok_emb = self.prev_wte(idx)
+                prev_pos_emb = self.prev_wpe(pos)
+                distillation_x = prev_tok_emb + prev_pos_emb
 
-        x = rmsnorm(x)
+        for i, block in enumerate(self.transformer.h):
+            current_x = block(current_x)
+            if distillation_mode and i < previous_depth:
+                distillation_x = block(distillation_x)
+                if i == previous_depth - 1:  # Use the previous depth's output for intermediate logits
+                    intermediate_logits = self.prev_lm_head(rmsnorm(distillation_x)).detach()
+
+        current_x = rmsnorm(current_x)
 
         if targets is not None:
-            # Use student or teacher lm_head based on the flag
-            logits = self.student_lm_head(x)
+            # Use student or teacher lm_head based on the flag for current run
+            logits = self.student_lm_head(current_x)
             
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
@@ -153,13 +161,24 @@ class GPT(nn.Module):
 
                 loss = (loss + distill_loss) * 0.5
         else:
-            logits = self.student_lm_head(x[:, [-1], :])
+            logits = self.student_lm_head(current_x[:, [-1], :])
             loss = None
 
         if not return_logits:
             logits = None
 
         return logits, loss
+
+    def store_current_layer(self, prev_wte, prev_lm_head, prev_wpe):
+        # Store the previous embedding, lm_head, and positional embeddings
+        self.prev_wte = prev_wte
+        self.prev_lm_head = prev_lm_head
+        self.prev_wpe = prev_wpe
+    
+    def discard_stored_layers(self):
+        self.prev_wte = None
+        self.prev_lm_head = None
+        self.prev_wpe = None
 
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
@@ -173,7 +192,7 @@ class GPT(nn.Module):
         
         optimizer = torch.optim.AdamW(params_to_optimize, lr=learning_rate, weight_decay=weight_decay, betas=betas)
         return optimizer
-        
+
 # -----------------------------------------------------------------------------
 # Our own simple Data Loader
 
@@ -313,7 +332,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         val_loader = DataLoader(input_val_bin, B, T)
     x, y = train_loader.next_batch()
 
-    # Add a variable to track the previous validation loss, depth, and distillation mode
+    # Add variables to track the previous validation loss, depth, and distillation mode
     previous_val_loss = None
     previous_depth = None
     distillation_mode = False
@@ -331,20 +350,16 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
                     model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
                 
-                # Copy position embeddings
-                model.transformer.wpe.weight.copy_(prev_model.transformer.wpe.weight)
-                # Copy student weights to new model's student weights
-                model.student_wte.weight.copy_(prev_model.student_wte.weight)
-                model.student_lm_head.weight.copy_(prev_model.student_lm_head.weight)
-            
+                # Store the previous embedding + lm_head + positional embeddings in the new model
+                model.store_current_layer(prev_model.student_wte, prev_model.student_lm_head, prev_model.transformer.wpe)
+
             previous_val_loss = best_val_loss  # Record the previous model's best validation loss
             previous_depth = len(prev_model.transformer.h)  # Record the previous model's depth
             distillation_mode = True  # Turn on distillation mode
         else:
             distillation_mode = False  # First model, distillation mode off
-        
-        return model
 
+        return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
@@ -373,8 +388,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # Set the batch size for the first stage
     train_loader.set_batch_size(current_batch_size)
 
-    raw_model = model
-
     # learning rate decay scheduler
     def get_lr(local_step, total_iters, current_lr):
         assert local_step <= total_iters
@@ -396,7 +409,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         if progressive_schedule and steps_in_current_schedule == current_iters - 100:
             next_depth, _, next_batch_size, _ = progressive_schedule[0]
             if train_loader.B != next_batch_size:
-                print0(f"Switching to next batch size {next_batch_size} at step {step}")
+                print(f"Switching to next batch size {next_batch_size} at step {step}")
                 train_loader.set_batch_size(next_batch_size)
         if step >= current_iters:
             if progressive_schedule:
@@ -446,6 +459,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
             # Turn off distillation mode if we surpass the previous best validation loss
             if distillation_mode and val_loss < previous_val_loss:
+                model.discard_stored_layers()
                 distillation_mode = False
             # log to console and to file
             print0(f"val loss {val_loss}")
