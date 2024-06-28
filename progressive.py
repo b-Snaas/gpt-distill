@@ -376,13 +376,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     raw_model = model
 
     # learning rate decay scheduler
-    def get_lr(it, total_iters, current_lr):
-        assert it <= total_iters
+    def get_lr(local_step, total_iters, current_lr):
+        assert local_step <= total_iters
         # 1) linear warmup for warmup_iters steps
-        if it < warmup_iters:
-            return current_lr * (it + 1) / warmup_iters
+        if local_step < warmup_iters:
+            return current_lr * (local_step + 1) / warmup_iters
         # 2) linear decay down to min learning rate
-        decay_ratio = (it - warmup_iters) / (total_iters - warmup_iters)
+        decay_ratio = (local_step - warmup_iters) / (total_iters - warmup_iters)
         assert 0 <= decay_ratio <= 1
         return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * current_lr
 
@@ -390,6 +390,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     instances_seen = 0  # Initialize counter for instances seen
     step = 0
     steps_in_current_schedule = 0
+    local_step = 0  # New variable to keep track of iterations within the current stage
 
     while step < num_iterations:
         if progressive_schedule and steps_in_current_schedule == current_iters - 100:
@@ -403,6 +404,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
                 steps_in_current_schedule = 0
+                local_step = 0  # Reset local step
 
                 # Free up the memory used by the old model and optimizer
                 prev_model = model
@@ -484,7 +486,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if p.grad is not None:
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
         # determine and set the learning rate for this iteration
-        lr = get_lr(step, num_iterations, current_lr)
+        lr = get_lr(local_step, num_iterations, current_lr)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
@@ -523,6 +525,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         step += 1
         steps_in_current_schedule += 1
+        local_step += 1  # Increment local step
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
