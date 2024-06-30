@@ -156,7 +156,7 @@ class GPT(nn.Module):
                 print("Shape of output: ", outp.shape)
 
                 # Create a mask to select 10% of the tokens
-                mask = torch.rand(logits.shape[0], logits.shape[1], device=logits.device) >= 0.9
+                mask = torch.rand_like(logits) < 0.9
                 print("Shape of mask: ", mask.shape)
                 
                 # Apply the mask to both student and teacher logits
