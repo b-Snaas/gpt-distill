@@ -529,7 +529,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 "backward_time": backward_time,
                 "cuda_sync_time": cuda_sync_time,
                 "batch_process_time": batch_time,
-                "distillation_loss": distill_loss.item(),
+                "distillation_loss": distill_loss,
             }
         else:
             log_dict = {
