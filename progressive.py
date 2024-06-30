@@ -357,6 +357,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             previous_val_loss = best_val_loss  # Record the previous model's best validation loss
             previous_depth = len(prev_model.transformer.h)  # Record the previous model's depth
             distillation_mode = True  # Turn on distillation mode
+            print("Turning distillation mode on")
         else:
             distillation_mode = False  # First model, distillation mode off
 
@@ -368,7 +369,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 5000, 100, 0.003), 
+        (3, 1000, 100, 0.003), 
         (48, 50000, 20, 0.0009)
     ]
 
@@ -531,9 +532,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "forward_time": forward_time,
             "backward_time": backward_time,
             "cuda_sync_time": cuda_sync_time,
-            "batch_process_time": batch_time
+            "batch_process_time": batch_time,
+            "distill_mode": distillation_mode,
         }
         if distill_loss is not None:
+            print("Logging distillation loss")
             log_dict["distillation_loss"] = distill_loss.item()
 
         wandb.log(log_dict)
