@@ -538,8 +538,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         cuda_sync_time = end_cuda_sync - start_cuda_sync
         # time and print
         t1 = time.time()
-        # the 0th iteration is often an outlier (much slower) => skip logging it
-        tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
 
         if distillation_mode:
