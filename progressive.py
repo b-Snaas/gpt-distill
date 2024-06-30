@@ -130,6 +130,7 @@ class GPT(nn.Module):
         current_x = current_tok_emb + pos_emb
 
         intermediate_logits = None
+        distill_loss = None
 
         if distillation_mode:
             # Use the stored embedding, lm_head, and positional embeddings of the previous depth for distillation
@@ -167,7 +168,7 @@ class GPT(nn.Module):
         if not return_logits:
             logits = None
 
-        return logits, loss
+        return logits, loss, distill_loss
 
     def store_current_layer(self, prev_wte, prev_lm_head, prev_wpe):
         # Store the previous embedding, lm_head, and positional embeddings
@@ -474,7 +475,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # forward pass
         forward_start = time.time()
         with ctx:
-            _, loss = model(
+            _, loss, distill_loss = model(
                 x, y, 
                 return_logits=False, 
                 previous_depth=previous_depth, 
@@ -522,7 +523,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
         # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
-        wandb.log({
+        log_dict = {
             "train_loss": lossf, 
             "step": step, 
             "instances_seen": instances_seen,
@@ -531,8 +532,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "backward_time": backward_time,
             "cuda_sync_time": cuda_sync_time,
             "batch_process_time": batch_time
-        })  # Log training loss, instances seen, and timings to wandb
+        }
+        if distill_loss is not None:
+            log_dict["distillation_loss"] = distill_loss.item()
 
+        wandb.log(log_dict)
+        
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
             timings.append(t1-t0)
