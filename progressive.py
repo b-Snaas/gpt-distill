@@ -340,7 +340,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     best_val_loss = float('inf')
 
     def initialize_model(depth, prev_model=None):
-        global previous_val_loss, previous_depth, distillation_mode
         model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=16, n_embd=1024)
         model = GPT(model_config)
         model = model.train().cuda()
@@ -354,15 +353,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Store the previous embedding + lm_head + positional embeddings in the new model
                 model.store_current_layer(prev_model.student_wte, prev_model.student_lm_head, prev_model.transformer.wpe)
 
-            previous_val_loss = best_val_loss  # Record the previous model's best validation loss
             previous_depth = len(prev_model.transformer.h)  # Record the previous model's depth
             distillation_mode = True  # Turn on distillation mode
             print("Turning distillation mode on")
         else:
             print("Distillation mode off")
             distillation_mode = False
+            previous_depth = None
 
-        return model
+        return model, distillation_mode, previous_depth
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
@@ -429,7 +428,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 clear_memory()
 
                 # Initialize the new model with weights from the previous model
-                model = initialize_model(current_depth, prev_model)
+                model, distillation_mode, previous_depth = initialize_model(current_depth, prev_model)
+                previous_val_loss = best_val_loss
                 optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
                 # Set the batch size for the new stage
