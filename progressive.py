@@ -147,6 +147,7 @@ class GPT(nn.Module):
             logits = self.student_lm_head(current_x)
             
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = ground_truth_loss
 
             # Combine with previous logits loss if distillation mode is on
             if distillation_mode:
