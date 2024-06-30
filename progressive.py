@@ -164,15 +164,17 @@ class GPT(nn.Module):
                 # Select the important logits
                 student_logits_selected = logits.view(-1, logits.size(-1))[indices].view(b, -1, logits.size(-1))
                 teacher_logits_selected = intermediate_logits.view(-1, intermediate_logits.size(-1))[indices].view(b, -1, intermediate_logits.size(-1))
+                
+                # Compute cross-entropy loss on selected logits
+                out = teacher_logits_selected.transpose(2, 1).detach()
+                outp = F.softmax(out, dim=1)
+
 
                 print(f"student_logits_selected shape: {student_logits_selected.shape}")
                 print(f"outp shape: {outp.shape}")
                 print(f"student_logits_selected dtype: {student_logits_selected.dtype}")
                 print(f"outp dtype: {outp.dtype}")
                 
-                # Compute cross-entropy loss on selected logits
-                out = teacher_logits_selected.transpose(2, 1).detach()
-                outp = F.softmax(out, dim=1)
                 distill_loss = F.cross_entropy(student_logits_selected.transpose(2, 1), outp, reduction='mean')
 
                 loss = (ground_truth_loss + distill_loss) * 0.5
