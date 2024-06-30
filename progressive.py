@@ -159,23 +159,23 @@ class GPT(nn.Module):
                 flat_diff = logit_diff.view(-1)
                 
                 # Get the indices of the top 1000 differences
-                _, indices = torch.topk(flat_diff, 1000)
+                num_to_select = min(1000, flat_diff.size(0))
+                _, indices = torch.topk(flat_diff, num_to_select)
                 
                 # Select the important logits
-                student_logits_selected = logits.view(-1, logits.size(-1))[indices].view(b, -1, logits.size(-1))
-                teacher_logits_selected = intermediate_logits.view(-1, intermediate_logits.size(-1))[indices].view(b, -1, intermediate_logits.size(-1))
-                
-                # Compute cross-entropy loss on selected logits
+                student_logits_selected = logits.view(-1, logits.size(-1))[indices]
+                teacher_logits_selected = intermediate_logits.view(-1, intermediate_logits.size(-1))[indices]
+
                 out = teacher_logits_selected.transpose(2, 1).detach()
                 outp = F.softmax(out, dim=1)
-
 
                 print(f"student_logits_selected shape: {student_logits_selected.shape}")
                 print(f"outp shape: {outp.shape}")
                 print(f"student_logits_selected dtype: {student_logits_selected.dtype}")
                 print(f"outp dtype: {outp.dtype}")
                 
-                distill_loss = F.cross_entropy(student_logits_selected.transpose(2, 1), outp, reduction='mean')
+                # Compute cross-entropy loss on selected logits
+                distill_loss = F.cross_entropy(student_logits_selected, outp, reduction='mean')
 
                 loss = (ground_truth_loss + distill_loss) * 0.5
         else:
