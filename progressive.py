@@ -103,7 +103,7 @@ class GPT(nn.Module):
 
         # Add student embedding and lm_head
         self.student_wte = nn.Embedding(config.vocab_size, config.n_embd)
-        self.student_wpe = nn.Embedding(config.block_size, config.n_embd),
+        self.student_wpe = nn.Embedding(config.block_size, config.n_embd)
         self.student_lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.student_lm_head.LLMC_SKIP_INIT = 1
         self.student_wte.weight = self.student_lm_head.weight
