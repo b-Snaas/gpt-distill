@@ -443,7 +443,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    _, loss, val_distill = model(x_val, y_val, return_logits=False)
+                    _, loss, val_distill = model(
+                    x_val, y_val, 
+                    return_logits=False, 
+                    previous_depth=previous_depth, 
+                    distillation_mode=distillation_mode
+                )
                     if distillation_mode:
                         val_dist = val_distill.item()
                     val_loss += loss.item()
