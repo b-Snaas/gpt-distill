@@ -132,20 +132,10 @@ class GPT(nn.Module):
         intermediate_logits = None
         distill_loss = None
 
-        # if distillation_mode:
-        #     # Use the stored embedding, lm_head, and positional embeddings of the previous depth for distillation
-        #     with torch.no_grad():
-        #         prev_tok_emb = self.prev_wte(idx)
-        #         prev_pos_emb = self.prev_wpe(pos)
-        #         distillation_x = prev_tok_emb + prev_pos_emb
-
         for i, block in enumerate(self.transformer.h):
             current_x = block(current_x)
             if distillation_mode and i < previous_depth:
                 intermediate_logits = self.student_lm_head(rmsnorm(current_x)).detach()
-                # distillation_x = block(distillation_x)
-                # if i == previous_depth - 1:  # Use the previous depth's output for intermediate logits
-                #     intermediate_logits = self.prev_lm_head(rmsnorm(distillation_x)).detach()
 
         current_x = rmsnorm(current_x)
 
@@ -157,11 +147,12 @@ class GPT(nn.Module):
 
             # Combine with previous logits loss if distillation mode is on
             if distillation_mode:
-                out = intermediate_logits.transpose(2, 1).detach()
-                outp = F.softmax(out, dim=1)
-                distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
+                # out = intermediate_logits.transpose(2, 1).detach()
+                # outp = F.softmax(out, dim=1)
+                # distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
+                intermediate_loss = F.cross_entropy(intermediate_logits.view(-1, intermediate_logits.size(-1)), targets.view(-1, intermediate_logits.size(-1)), ignore_index=-1)
 
-                loss = (loss + distill_loss) * 0.5
+                # loss = (loss + distill_loss) * 0.5
         else:
             logits = self.student_lm_head(current_x[:, [-1], :])
             loss = None
@@ -169,7 +160,7 @@ class GPT(nn.Module):
         if not return_logits:
             logits = None
 
-        return logits, loss, distill_loss
+        return logits, loss, intermediate_loss
 
     def store_current_layer(self, prev_wte, prev_lm_head, prev_wpe):
         # Store the previous embedding, lm_head, and positional embeddings
@@ -451,7 +442,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    _, loss, _ = model(x_val, y_val, return_logits=False)
+                    _, loss, val_distill = model(x_val, y_val, return_logits=False)
+                    if distillation_mode:
+                        val_dist = val_distill.item()
                     val_loss += loss.item()
                 val_loss /= val_max_steps
 
@@ -466,6 +459,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 distillation_mode = False
             # log to console and to file
             wandb.log({"val_loss": val_loss, "step": step})
+
+            if distillation_mode:
+                wandb.log({"val_distill_loss": val_dist, "step": step})
 
         if step == num_iterations:
             break
