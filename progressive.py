@@ -370,7 +370,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 1000, 100, 0.003), 
+        (3, 100, 100, 0.003), 
         (48, 50000, 20, 0.0009)
     ]
 
@@ -542,6 +542,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         if distill_loss is not None:
             print("Logging distillation loss")
             log_dict["distillation_loss"] = distill_loss.item()
+        else:
+            print(f"Distillation loss is None. Distillation mode: {distillation_mode}, Previous depth: {previous_depth}")
+
 
         wandb.log(log_dict)
 
