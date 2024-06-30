@@ -130,7 +130,6 @@ class GPT(nn.Module):
 
         intermediate_logits = None
         distill_loss = None
-        intermediate_loss = None
 
         for i, block in enumerate(self.transformer.h):
             if distillation_mode and i < previous_depth:
@@ -149,14 +148,6 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             loss = ground_truth_loss
 
-            # Combine with previous logits loss if distillation mode is on
-            if distillation_mode:
-                out = intermediate_logits.transpose(2, 1).detach()
-                outp = F.softmax(out, dim=1)
-
-                distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
-
-                loss = (loss + distill_loss) * 0.5
         else:
             logits = self.student_lm_head(current_x[:, [-1], :])
             loss = None
