@@ -179,9 +179,9 @@ class GPT(nn.Module):
         # Always optimize student parameters and shared transformer blocks
         params_to_optimize = (
             list(self.student_wte.parameters()) +
+            list(self.student_wpe.parameters()) +
             list(self.student_lm_head.parameters()) +
-            list(self.transformer.h.parameters()) +
-            list(self.transformer.wpe.parameters())
+            list(self.transformer.h.parameters())
         )
         
         optimizer = torch.optim.AdamW(params_to_optimize, lr=learning_rate, weight_decay=weight_decay, betas=betas)
