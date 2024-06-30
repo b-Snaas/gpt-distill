@@ -146,16 +146,16 @@ class GPT(nn.Module):
             # Use student or teacher lm_head based on the flag for current run
             logits = self.student_lm_head(current_x)
             
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             # Combine with previous logits loss if distillation mode is on
             if distillation_mode:
-                # out = intermediate_logits.transpose(2, 1).detach()
-                # outp = F.softmax(out, dim=1)
-                # distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
-                intermediate_loss = F.cross_entropy(intermediate_logits.view(-1, intermediate_logits.size(-1)), targets.view(-1), ignore_index=-1)
+                out = intermediate_logits.transpose(2, 1).detach()
+                outp = F.softmax(out, dim=1)
+                distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
+                # intermediate_loss = F.cross_entropy(intermediate_logits.view(-1, intermediate_logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-                # loss = (loss + distill_loss) * 0.5
+                loss = (loss + distill_loss) * 0.5
         else:
             logits = self.student_lm_head(current_x[:, [-1], :])
             loss = None
@@ -163,7 +163,7 @@ class GPT(nn.Module):
         if not return_logits:
             logits = None
 
-        return logits, loss, intermediate_loss
+        return logits, loss, ground_truth_loss, distill_loss
 
     def store_current_layer(self, prev_wte, prev_lm_head, prev_wpe):
         # Store the previous embedding, lm_head, and positional embeddings
@@ -367,8 +367,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 200, 100, 0.003), 
-        (48, 50000, 20, 0.0005)
+        (3, 500, 100, 0.003), 
+        (48, 50000, 10, 0.0009)
     ]
 
     # Calculate total iterations in the progressive schedule
@@ -449,16 +449,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             val_loader.reset()
             with torch.no_grad():
                 val_loss = 0.0
+                val_ground = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    _, loss, val_distill = model(
+                    _, loss, val_ground_truth, val_distill = model(
                     x_val, y_val, 
                     return_logits=False, 
                     previous_depth=previous_depth, 
                     distillation_mode=distillation_mode
                 )
-                    if distillation_mode:
-                        val_dist = val_distill.item()
                     val_loss += loss.item()
                 val_loss /= val_max_steps
 
@@ -472,10 +471,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 model.discard_stored_layers()
                 distillation_mode = False
             # log to console and to file
-            wandb.log({"val_loss": val_loss, "step": step})
 
             if distillation_mode:
-                wandb.log({"val_distill_loss": val_dist, "step": step})
+                val_ground += val_ground_truth.item()
+                wandb.log({"val_loss": val_ground, "step": step})
+            else:
+                val_loss += loss.item()
+                wandb.log({"val_loss": val_loss, "step": step})
 
         if step == num_iterations:
             break
@@ -486,7 +488,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # forward pass
         forward_start = time.time()
         with ctx:
-            _, loss, distill_loss = model(
+            _, loss, ground_truth_loss, distill_loss = model(
                 x, y, 
                 return_logits=False, 
                 previous_depth=previous_depth, 
@@ -534,22 +536,31 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
 
-        # If distillation mode is on turn it to 1, else 0
-        distill_mode = 1 if distillation_mode else 0
+        if distillation_mode:
 
-        log_dict = {
-            "train_loss": lossf, 
-            "step": step, 
-            "instances_seen": instances_seen,
-            "batch_time": t1 - t0,
-            "forward_time": forward_time,
-            "backward_time": backward_time,
-            "cuda_sync_time": cuda_sync_time,
-            "batch_process_time": batch_time,
-            "distill_mode": distill_mode,
-        }
-        if distill_loss is not None:
-            log_dict["distillation_loss"] = distill_loss.item()
+            log_dict = {
+                "train_loss": ground_truth_loss.item(), 
+                "step": step, 
+                "instances_seen": instances_seen,
+                "batch_time": t1 - t0,
+                "forward_time": forward_time,
+                "backward_time": backward_time,
+                "cuda_sync_time": cuda_sync_time,
+                "batch_process_time": batch_time,
+                "distillation_loss": distill_loss.item(),
+            }
+        else:
+            log_dict = {
+                "train_loss": lossf, 
+                "step": step, 
+                "instances_seen": instances_seen,
+                "batch_time": t1 - t0,
+                "forward_time": forward_time,
+                "backward_time": backward_time,
+                "cuda_sync_time": cuda_sync_time,
+                "batch_process_time": batch_time,
+            }
+
 
         wandb.log(log_dict)
 
