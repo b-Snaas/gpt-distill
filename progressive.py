@@ -143,36 +143,23 @@ class GPT(nn.Module):
         current_x = rmsnorm(current_x)
 
         if targets is not None:
+            # Use student or teacher lm_head based on the flag for current run
             logits = self.student_lm_head(current_x)
-            
+
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             loss = ground_truth_loss
 
+            # Combine with previous logits loss if distillation mode is on
             if distillation_mode:
                 out = intermediate_logits.transpose(2, 1).detach()
                 outp = F.softmax(out, dim=1)
 
-                print("Shape of logits: ", logits.shape)
-                print("Shape of output: ", outp.shape)
+                distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
 
-                # Create a mask to select 10% of the tokens
-                mask = torch.rand_like(logits) < 0.9
-                print("Shape of mask: ", mask.shape)
-                
-                # Apply the mask to both student and teacher logits
-                masked_student_logits = logits
-                masked_teacher_logits = outp.transpose(1, 2)
-
-                # Calculate distillation loss only for the masked tokens
-                distill_loss = F.cross_entropy(masked_student_logits, masked_teacher_logits, reduction='mean')
-
-                # Combine losses
                 loss = (loss + distill_loss) * 0.5
         else:
             logits = self.student_lm_head(current_x[:, [-1], :])
             loss = None
-            ground_truth_loss = None
-            distill_loss = None
 
         if not return_logits:
             logits = None
