@@ -131,6 +131,7 @@ class GPT(nn.Module):
 
         intermediate_logits = None
         distill_loss = None
+        intermediate_loss = None
 
         for i, block in enumerate(self.transformer.h):
             current_x = block(current_x)
