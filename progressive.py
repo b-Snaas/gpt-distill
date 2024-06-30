@@ -166,7 +166,7 @@ class GPT(nn.Module):
                 student_logits_selected = logits.view(-1, logits.size(-1))[indices]
                 teacher_logits_selected = intermediate_logits.view(-1, intermediate_logits.size(-1))[indices]
 
-                out = teacher_logits_selected.transpose(2, 1).detach()
+                out = teacher_logits_selected.detach()
                 outp = F.softmax(out, dim=1)
 
                 print(f"student_logits_selected shape: {student_logits_selected.shape}")
