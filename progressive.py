@@ -132,19 +132,20 @@ class GPT(nn.Module):
         intermediate_logits = None
         distill_loss = None
 
-        if distillation_mode:
-            # Use the stored embedding, lm_head, and positional embeddings of the previous depth for distillation
-            with torch.no_grad():
-                prev_tok_emb = self.prev_wte(idx)
-                prev_pos_emb = self.prev_wpe(pos)
-                distillation_x = prev_tok_emb + prev_pos_emb
+        # if distillation_mode:
+        #     # Use the stored embedding, lm_head, and positional embeddings of the previous depth for distillation
+        #     with torch.no_grad():
+        #         prev_tok_emb = self.prev_wte(idx)
+        #         prev_pos_emb = self.prev_wpe(pos)
+        #         distillation_x = prev_tok_emb + prev_pos_emb
 
         for i, block in enumerate(self.transformer.h):
             current_x = block(current_x)
             if distillation_mode and i < previous_depth:
-                distillation_x = block(distillation_x)
-                if i == previous_depth - 1:  # Use the previous depth's output for intermediate logits
-                    intermediate_logits = self.prev_lm_head(rmsnorm(distillation_x)).detach()
+                intermediate_logits = self.student_lm_head(rmsnorm(current_x)).detach()
+                # distillation_x = block(distillation_x)
+                # if i == previous_depth - 1:  # Use the previous depth's output for intermediate logits
+                #     intermediate_logits = self.prev_lm_head(rmsnorm(distillation_x)).detach()
 
         current_x = rmsnorm(current_x)
 
@@ -349,7 +350,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                     model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
                 
                 # Store the previous embedding + lm_head + positional embeddings in the new model
-                model.store_current_layer(prev_model.student_wte, prev_model.student_lm_head, prev_model.transformer.wpe)
+                # model.store_current_layer(prev_model.student_wte, prev_model.student_lm_head, prev_model.transformer.wpe)
 
             previous_depth = len(prev_model.transformer.h)  # Record the previous model's depth
             distillation_mode = True  # Turn on distillation mode
@@ -483,12 +484,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             )
         forward_end = time.time()
         forward_time = forward_end - forward_start
-
-        if distillation_mode:
-            # Print if the distill loss is None
-            if distill_loss is None:
-                print(f"Distillation loss is None during distillation")
-
+        
         start_batch = time.time() 
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
@@ -545,9 +541,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         if distill_loss is not None:
             print("Logging distillation loss")
             log_dict["distillation_loss"] = distill_loss.item()
-        else:
-            print(f"Distillation loss is None. Distillation mode: {distillation_mode}, Previous depth: {previous_depth}")
-
 
         wandb.log(log_dict)
 
