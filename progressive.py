@@ -143,7 +143,7 @@ class GPT(nn.Module):
 
         if targets is not None:
             # Use student or teacher lm_head based on the flag for current run
-            logits = self.student_lm_head(current_x)
+            logits = self.lm_head(current_x)
 
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             loss = ground_truth_loss
@@ -182,7 +182,7 @@ class GPT(nn.Module):
 
                 loss = (ground_truth_loss + distill_loss) * 0.5
         else:
-            logits = self.student_lm_head(current_x[:, [-1], :])
+            logits = self.lm_head(current_x[:, [-1], :])
             loss = None
 
         if not return_logits:
