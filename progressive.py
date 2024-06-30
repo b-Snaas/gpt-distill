@@ -98,12 +98,12 @@ class GPT(nn.Module):
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
-            wpe = nn.Embedding(config.block_size, config.n_embd),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
         ))
 
         # Add student embedding and lm_head
         self.student_wte = nn.Embedding(config.vocab_size, config.n_embd)
+        self.student_wpe = nn.Embedding(config.block_size, config.n_embd),
         self.student_lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.student_lm_head.LLMC_SKIP_INIT = 1
         self.student_wte.weight = self.student_lm_head.weight
@@ -126,7 +126,7 @@ class GPT(nn.Module):
 
         # Use student or teacher embedding based on the flag for current run
         current_tok_emb = self.student_wte(idx)
-        pos_emb = self.transformer.wpe(pos)
+        pos_emb = self.student_wpe(pos)
         current_x = current_tok_emb + pos_emb
 
         intermediate_logits = None
@@ -340,6 +340,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Copy transformer blocks
                 for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
                     model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
+
+                # copy student embedding + positional embedding and lm_head
+                model.student_wte.load_state_dict(prev_model.student_wte.state_dict())
+                model.student_lm_head.load_state_dict(prev_model.student_lm_head.state_dict())
+
                 
                 # Store the previous embedding + lm_head + positional embeddings in the new model
                 # model.store_current_layer(prev_model.student_wte, prev_model.student_lm_head, prev_model.transformer.wpe)
