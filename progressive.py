@@ -160,8 +160,8 @@ class GPT(nn.Module):
                 print("Shape of mask: ", mask.shape)
                 
                 # Apply the mask to both student and teacher logits
-                masked_student_logits = logits[mask]
-                masked_teacher_logits = outp.transpose(1, 2)[mask]
+                masked_student_logits = logits
+                masked_teacher_logits = outp.transpose(1, 2)
 
                 # Calculate distillation loss only for the masked tokens
                 distill_loss = F.cross_entropy(masked_student_logits, masked_teacher_logits, reduction='mean')
