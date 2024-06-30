@@ -164,6 +164,11 @@ class GPT(nn.Module):
                 # Select the important logits
                 student_logits_selected = logits.view(-1, logits.size(-1))[indices].view(b, -1, logits.size(-1))
                 teacher_logits_selected = intermediate_logits.view(-1, intermediate_logits.size(-1))[indices].view(b, -1, intermediate_logits.size(-1))
+
+                print(f"student_logits_selected shape: {student_logits_selected.shape}")
+                print(f"outp shape: {outp.shape}")
+                print(f"student_logits_selected dtype: {student_logits_selected.dtype}")
+                print(f"outp dtype: {outp.dtype}")
                 
                 # Compute cross-entropy loss on selected logits
                 out = teacher_logits_selected.transpose(2, 1).detach()
