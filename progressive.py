@@ -102,11 +102,11 @@ class GPT(nn.Module):
         ))
 
         # Add student embedding and lm_head
-        self.student_wte = nn.Embedding(config.vocab_size, config.n_embd)
-        self.student_wpe = nn.Embedding(config.block_size, config.n_embd)
-        self.student_lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.student_lm_head.LLMC_SKIP_INIT = 1
-        self.student_wte.weight = self.student_lm_head.weight
+        self.wte = nn.Embedding(config.vocab_size, config.n_embd)
+        self.wpe = nn.Embedding(config.block_size, config.n_embd)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head.LLMC_SKIP_INIT = 1
+        self.wte.weight = self.lm_head.weight
 
         # Store previous embedding, lm_head, and positional embeddings
         self.prev_wte = None
@@ -124,19 +124,18 @@ class GPT(nn.Module):
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
 
-        current_tok_emb = self.student_wte(idx)
-        pos_emb = self.student_wpe(pos)
+        current_tok_emb = self.wte(idx)
+        pos_emb = self.wpe(pos)
         current_x = current_tok_emb + pos_emb
 
         intermediate_logits = None
         distill_loss = None
-        intermediate_loss = None
 
         for i, block in enumerate(self.transformer.h):
             if distillation_mode and i < previous_depth:
                 with torch.no_grad():
                     current_x = block(current_x)
-                    intermediate_logits = self.student_lm_head(rmsnorm(current_x))
+                    intermediate_logits = self.lm_head(rmsnorm(current_x))
             else:
                 current_x = block(current_x)
 
@@ -145,22 +144,43 @@ class GPT(nn.Module):
         if targets is not None:
             # Use student or teacher lm_head based on the flag for current run
             logits = self.student_lm_head(current_x)
-            
+
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             loss = ground_truth_loss
 
             # Combine with previous logits loss if distillation mode is on
             if distillation_mode:
-                out = intermediate_logits.transpose(2, 1).detach()
+                # Calculate the difference between student and teacher logits
+                logit_diff = torch.abs(logits - intermediate_logits)
+
+                # Flatten the difference tensor except for the batch dimension
+                flat_diff = logit_diff.view(logit_diff.size(0), -1)
+
+                # Get the indices of the top 1000 differences per batch
+                num_to_select = min(1000, flat_diff.size(1))
+                _, indices = torch.topk(flat_diff, num_to_select, dim=1)
+
+                # Create a mask from the indices to select the important logits
+                mask = torch.zeros_like(flat_diff).scatter_(1, indices, 1).bool()
+
+                # Reshape the mask to the original logits shape
+                mask = mask.view(logit_diff.size())
+                
+                # Select the important logits using the mask
+                student_logits_selected = logits[mask].view(-1, logits.size(-1))
+                teacher_logits_selected = intermediate_logits[mask].view(-1, intermediate_logits.size(-1))
+
+                out = teacher_logits_selected.detach()
                 outp = F.softmax(out, dim=1)
 
-                # Print the shape of the logits out and output
-                print("Shape of logits: ", logits.shape)
-                print("Shape of output: ", outp.shape)
+                # Log the shape of the selected logits
+                print(f"Student logits shape: {student_logits_selected.shape}")
+                print(f"outp shape: {outp.shape}")
 
-                distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
+                # Compute cross-entropy loss on selected logits
+                distill_loss = F.cross_entropy(student_logits_selected, outp, reduction='mean')
 
-                loss = (loss + distill_loss) * 0.5
+                loss = (ground_truth_loss + distill_loss) * 0.5
         else:
             logits = self.student_lm_head(current_x[:, [-1], :])
             loss = None
@@ -185,9 +205,9 @@ class GPT(nn.Module):
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # Always optimize student parameters and shared transformer blocks
         params_to_optimize = (
-            list(self.student_wte.parameters()) +
-            list(self.student_wpe.parameters()) +
-            list(self.student_lm_head.parameters()) +
+            list(self.wte.parameters()) +
+            list(self.wpe.parameters()) +
+            list(self.lm_head.parameters()) +
             list(self.transformer.h.parameters())
         )
         
@@ -349,8 +369,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                     model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
 
                 # copy student embedding + positional embedding and lm_head
-                model.student_wte.load_state_dict(prev_model.student_wte.state_dict())
-                model.student_lm_head.load_state_dict(prev_model.student_lm_head.state_dict())
+                model.wte.load_state_dict(prev_model.wte.state_dict())
+                model.lm_head.load_state_dict(prev_model.lm_head.state_dict())
 
                 
                 # Store the previous embedding + lm_head + positional embeddings in the new model
@@ -373,7 +393,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # progressive training schedule
     progressive_schedule = [
         (3, 200, 100, 0.003), 
-        (48, 50000, 8, 0.0008)
+        (48, 50000, 16, 0.0008)
     ]
 
     # Calculate total iterations in the progressive schedule
