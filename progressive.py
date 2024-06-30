@@ -486,6 +486,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         forward_end = time.time()
         forward_time = forward_end - forward_start
 
+        if distillation_mode:
+            # Print if the distill loss is None
+            if distill_loss is None:
+                print(f"Distillation loss is None during distillation")
+
         start_batch = time.time() 
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
