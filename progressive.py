@@ -407,10 +407,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     while step < num_iterations:
         if progressive_schedule and steps_in_current_schedule == current_iters - 100:
-            next_depth, _, next_batch_size, _ = progressive_schedule[0]
+            next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
             if train_loader.B != next_batch_size:
                 print(f"Switching to next batch size {next_batch_size} at step {step}")
                 train_loader.set_batch_size(next_batch_size)
+                current_lr = new_lr
         if step >= current_iters:
             if progressive_schedule:
                 # Move to the next depth stage
