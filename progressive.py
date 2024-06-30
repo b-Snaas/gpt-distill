@@ -359,7 +359,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             distillation_mode = True  # Turn on distillation mode
             print("Turning distillation mode on")
         else:
-            distillation_mode = False  # First model, distillation mode off
+            print("Distillation mode off")
+            distillation_mode = False
 
         return model
 
@@ -461,10 +462,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
             # Turn off distillation mode if we surpass the previous best validation loss
             if distillation_mode and val_loss < previous_val_loss:
+                print("Turning distillation mode off because of better validation loss")
                 model.discard_stored_layers()
                 distillation_mode = False
             # log to console and to file
-            print0(f"val loss {val_loss}")
             wandb.log({"val_loss": val_loss, "step": step})
 
         if step == num_iterations:
