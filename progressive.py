@@ -450,7 +450,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    _, loss = model(x_val, y_val, return_logits=False)
+                    _, loss, _ = model(x_val, y_val, return_logits=False)
                     val_loss += loss.item()
                 val_loss /= val_max_steps
 
@@ -537,7 +537,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             log_dict["distillation_loss"] = distill_loss.item()
 
         wandb.log(log_dict)
-        
+
         # keep track of smooth timings, last 20 iterations
         if step > 0 and step > num_iterations - 20:
             timings.append(t1-t0)
