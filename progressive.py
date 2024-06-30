@@ -156,7 +156,7 @@ class GPT(nn.Module):
                 print("Shape of output: ", outp.shape)
 
                 # Create a mask to select 10% of the tokens
-                mask = torch.rand(logits.shape[0], logits.shape[1], device=logits.device) < 0.1
+                mask = torch.rand(logits.shape[0], logits.shape[1], device=logits.device) >= 0.9
                 print("Shape of mask: ", mask.shape)
                 
                 # Apply the mask to both student and teacher logits
@@ -297,8 +297,7 @@ def print0(*args, **kwargs):
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            model_path=None, 
-            batch_size=64, 
+            model_path=None,  
             sequence_length=512, 
             num_iterations=12288, 
             learning_rate=0.0018, 
@@ -313,7 +312,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "input_bin": input_bin,
         "input_val_bin": input_val_bin,
         "output_dir": model_path,
-        "batch_size": batch_size,
         "sequence_length": sequence_length,
         "num_iterations": num_iterations,
         "learning_rate": learning_rate,
@@ -323,10 +321,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "val_max_steps": val_max_steps,
     })
 
-    # args error checking and convenience variables
-    B, T = batch_size, sequence_length
-    assert 1 <= T <= 1024
-
     assert torch.cuda.is_available(), "CUDA is required"
     device = 'cuda:0'
     torch.cuda.set_device(device)
@@ -334,13 +328,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
-
-    # load tokens
-    train_loader = DataLoader(input_bin, B, T)
-    val_loader = None
-    if input_val_bin:
-        val_loader = DataLoader(input_val_bin, B, T)
-    x, y = train_loader.next_batch()
 
     # Add variables to track the previous validation loss, depth, and distillation mode
     previous_val_loss = None
@@ -399,8 +386,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     model, distillation_mode, previous_depth = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
 
-    # Set the batch size for the first stage
-    train_loader.set_batch_size(current_batch_size)
+    # load tokens
+    train_loader = DataLoader(input_bin, current_batch_size, sequence_length)
+    val_loader = None
+    if input_val_bin:
+        val_loader = DataLoader(input_val_bin, current_batch_size, sequence_length)
+    x, y = train_loader.next_batch()
 
     # learning rate decay scheduler
     def get_lr(local_step, total_iters, current_lr):
@@ -425,6 +416,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if train_loader.B != next_batch_size:
                 print(f"Switching to next batch size {next_batch_size} at step {step}")
                 train_loader.set_batch_size(next_batch_size)
+                val_loader.set_batch_size(next_batch_size)
                 current_lr = new_lr
         if step >= current_iters:
             if progressive_schedule:
@@ -447,6 +439,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 
                 # Set the batch size for the new stage
                 train_loader.set_batch_size(new_batch_size)
+                val_loader.set_batch_size(new_batch_size)
 
                 # Delete the previous model to free memory
                 del prev_model
