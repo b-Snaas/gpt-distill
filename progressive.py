@@ -124,7 +124,6 @@ class GPT(nn.Module):
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
 
-        # Use student or teacher embedding based on the flag for current run
         current_tok_emb = self.student_wte(idx)
         pos_emb = self.student_wpe(pos)
         current_x = current_tok_emb + pos_emb
@@ -134,9 +133,12 @@ class GPT(nn.Module):
         intermediate_loss = None
 
         for i, block in enumerate(self.transformer.h):
-            current_x = block(current_x)
             if distillation_mode and i < previous_depth:
-                intermediate_logits = self.student_lm_head(rmsnorm(current_x)).detach()
+                with torch.no_grad():
+                    current_x = block(current_x)
+                    intermediate_logits = self.student_lm_head(rmsnorm(current_x))
+            else:
+                current_x = block(current_x)
 
         current_x = rmsnorm(current_x)
 
