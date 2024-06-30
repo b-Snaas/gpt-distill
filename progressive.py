@@ -335,8 +335,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # Add variables to track the previous validation loss, depth, and distillation mode
     previous_val_loss = None
-    previous_depth = None
-    distillation_mode = False
     best_val_loss = float('inf')
 
     def initialize_model(depth, prev_model=None):
@@ -384,7 +382,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # initialize the first model and optimizer
     current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
-    model = initialize_model(current_depth)
+    model, distillation_mode, previous_depth = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
 
     # Set the batch size for the first stage
