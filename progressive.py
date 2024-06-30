@@ -151,7 +151,7 @@ class GPT(nn.Module):
                 # out = intermediate_logits.transpose(2, 1).detach()
                 # outp = F.softmax(out, dim=1)
                 # distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
-                intermediate_loss = F.cross_entropy(intermediate_logits.view(-1, intermediate_logits.size(-1)), targets.view(-1, intermediate_logits.size(-1)), ignore_index=-1)
+                intermediate_loss = F.cross_entropy(intermediate_logits.view(-1, intermediate_logits.size(-1)), targets.view(-1), ignore_index=-1)
 
                 # loss = (loss + distill_loss) * 0.5
         else:
