@@ -523,7 +523,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # the 0th iteration is often an outlier (much slower) => skip logging it
         tokens_per_second = B * T / (t1-t0)
         lossf = loss.item() # keep track of the mean loss
-        # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
+
+        # If distillation mode is on turn it to 1, else 0
+        distill_mode = 1 if distillation_mode else 0
+
         log_dict = {
             "train_loss": lossf, 
             "step": step, 
@@ -533,7 +536,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "backward_time": backward_time,
             "cuda_sync_time": cuda_sync_time,
             "batch_process_time": batch_time,
-            "distill_mode": distillation_mode,
+            "distill_mode": distill_mode,
         }
         if distill_loss is not None:
             print("Logging distillation loss")
