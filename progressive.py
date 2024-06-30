@@ -169,11 +169,21 @@ class GPT(nn.Module):
                 out = teacher_logits_selected.detach()
                 outp = F.softmax(out, dim=1)
 
+                # Ensure the selected logits are correctly shaped
+                assert student_logits_selected.shape[0] == outp.shape[0], "Shape mismatch between selected student logits and teacher outputs"
+
                 print(f"student_logits_selected shape: {student_logits_selected.shape}")
                 print(f"outp shape: {outp.shape}")
                 print(f"student_logits_selected dtype: {student_logits_selected.dtype}")
                 print(f"outp dtype: {outp.dtype}")
-                
+
+                # Ensure data types are compatible
+                if student_logits_selected.dtype != torch.float32:
+                    student_logits_selected = student_logits_selected.float()
+
+                if outp.dtype != torch.float32:
+                    outp = outp.float()
+                    
                 # Compute cross-entropy loss on selected logits
                 distill_loss = F.cross_entropy(student_logits_selected, outp, reduction='mean')
 
