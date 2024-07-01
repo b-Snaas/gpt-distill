@@ -119,7 +119,7 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, return_logits=True, previous_depth=None, distillation_mode=False, top_x=50):
+    def forward(self, idx, targets=None, return_logits=True, previous_depth=None, distillation_mode=False, top_x=1000):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
@@ -150,7 +150,9 @@ class GPT(nn.Module):
             print("Logits shape:", logits.shape)
 
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-            loss = ground_truth_loss
+
+            if not distillation_mode:
+                loss = ground_truth_loss
 
             # Combine with previous logits loss if distillation mode is on
             if distillation_mode:
@@ -173,7 +175,7 @@ class GPT(nn.Module):
                 print("Softmax output shape:", outp.shape)
                 distill_loss = F.cross_entropy(masked_logits, outp, reduction='mean')
 
-                loss = (loss + distill_loss) * 0.5
+                loss = (ground_truth_loss + distill_loss) * 0.5
         else:
             logits = self.student_lm_head(current_x[:, [-1], :])
             loss = None
