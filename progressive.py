@@ -119,7 +119,7 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, return_logits=True, previous_depth=None, distillation_mode=False):
+    def forward(self, idx, targets=None, return_logits=True, previous_depth=None, distillation_mode=False, top_x=50):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
@@ -137,32 +137,41 @@ class GPT(nn.Module):
                 with torch.no_grad():
                     current_x = block(current_x)
                     intermediate_logits = self.student_lm_head(rmsnorm(current_x))
+                    print(f"Intermediate logits shape at block {i}:", intermediate_logits.shape)
             else:
                 current_x = block(current_x)
 
         current_x = rmsnorm(current_x)
+        print("Final layer normalized output shape:", current_x.shape)
 
         if targets is not None:
             # Use student or teacher lm_head based on the flag for current run
             logits = self.student_lm_head(current_x)
-
-            # Print the shape of the logits
-            print(f"Logits shape: {logits.shape}")
-            if intermediate_logits is not None:
-                print(f"Intermediate logits shape: {intermediate_logits.shape}")
+            print("Logits shape:", logits.shape)
 
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             loss = ground_truth_loss
 
             # Combine with previous logits loss if distillation mode is on
             if distillation_mode:
-                out = intermediate_logits.transpose(2, 1).detach()
-                outp = F.softmax(out, dim=1)
+                # Get the top X indices for each position in the sequence
+                topk_indices = torch.topk(intermediate_logits, top_x, dim=-1).indices
+                print("Topk indices shape:", topk_indices.shape)
 
-                # Print the shape of the outp
-                print(f"Outp shape: {outp.shape}")
+                # Create a mask for the top X logits
+                mask = torch.zeros_like(intermediate_logits, dtype=torch.bool).scatter_(-1, topk_indices, True)
+                print("Mask shape:", mask.shape)
 
-                distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
+                # Mask the logits to keep only the top X values
+                masked_intermediate_logits = intermediate_logits.masked_select(mask).view(b, t, top_x)
+                print("Masked intermediate logits shape:", masked_intermediate_logits.shape)
+                masked_logits = logits.masked_select(mask).view(b, t, top_x)
+                print("Masked logits shape:", masked_logits.shape)
+
+                # Compute the distillation loss using masked logits
+                outp = F.softmax(masked_intermediate_logits, dim=-1).detach()
+                print("Softmax output shape:", outp.shape)
+                distill_loss = F.cross_entropy(masked_logits.transpose(2, 1), outp, reduction='mean')
 
                 loss = (loss + distill_loss) * 0.5
         else:
