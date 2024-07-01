@@ -148,7 +148,8 @@ class GPT(nn.Module):
 
             # Print the shape of the logits
             print(f"Logits shape: {logits.shape}")
-            print(f"Intermediate logits shape: {intermediate_logits.shape}")
+            if intermediate_logits is not None:
+                print(f"Intermediate logits shape: {intermediate_logits.shape}")
 
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             loss = ground_truth_loss
@@ -362,7 +363,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 7500, 90, 0.0025), 
+        (3, 200, 90, 0.0025), 
         (48, 50000, 20, 0.0009)
     ]
 
