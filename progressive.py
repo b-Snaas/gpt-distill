@@ -146,6 +146,10 @@ class GPT(nn.Module):
             # Use student or teacher lm_head based on the flag for current run
             logits = self.student_lm_head(current_x)
 
+            # Print the shape of the logits
+            print(f"Logits shape: {logits.shape}")
+            print(f"Intermediate logits shape: {intermediate_logits.shape}")
+
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             loss = ground_truth_loss
 
@@ -153,6 +157,9 @@ class GPT(nn.Module):
             if distillation_mode:
                 out = intermediate_logits.transpose(2, 1).detach()
                 outp = F.softmax(out, dim=1)
+
+                # Print the shape of the outp
+                print(f"Outp shape: {outp.shape}")
 
                 distill_loss = F.cross_entropy(logits.transpose(2, 1), outp, reduction='mean')
 
