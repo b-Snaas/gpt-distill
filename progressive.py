@@ -171,7 +171,7 @@ class GPT(nn.Module):
                 # Compute the distillation loss using masked logits
                 outp = F.softmax(masked_intermediate_logits, dim=-1).detach()
                 print("Softmax output shape:", outp.shape)
-                distill_loss = F.cross_entropy(masked_logits.transpose(2, 1), outp, reduction='mean')
+                distill_loss = F.cross_entropy(masked_logits, outp, reduction='mean')
 
                 loss = (loss + distill_loss) * 0.5
         else:
