@@ -119,7 +119,7 @@ class GPT(nn.Module):
         if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, return_logits=True, previous_depth=None, distillation_mode=False, top_x=20000):
+    def forward(self, idx, targets=None, return_logits=True, previous_depth=None, distillation_mode=False, top_x=10000):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
@@ -156,15 +156,24 @@ class GPT(nn.Module):
 
             # Combine with previous logits loss if distillation mode is on
             if distillation_mode:
-                # Get the top X indices for each position in the sequence
-                topk_indices = torch.topk(intermediate_logits, top_x, dim=-1).indices
+                # Compute the absolute difference between intermediate_logits and logits
+                diff_logits = torch.abs(intermediate_logits - logits)
+                print("Difference logits shape:", diff_logits.shape)
+
+                # Sum the differences across the batch and sequence dimensions
+                aggregated_diff = diff_logits.sum(dim=(0, 1))
+                print("Aggregated difference shape:", aggregated_diff.shape)
+
+                # Get the top X indices for the most different logits in the vocabulary
+                topk_indices = torch.topk(aggregated_diff, top_x, dim=-1).indices
                 print("Topk indices shape:", topk_indices.shape)
 
-                # Create a mask for the top X logits
-                mask = torch.zeros_like(intermediate_logits, dtype=torch.bool).scatter_(-1, topk_indices, True)
+                # Create a mask for the top X most different logits
+                mask = torch.zeros_like(aggregated_diff, dtype=torch.bool).scatter_(0, topk_indices, True)
+                mask = mask.unsqueeze(0).unsqueeze(0).expand_as(diff_logits)  # Expand mask to the shape of diff_logits
                 print("Mask shape:", mask.shape)
 
-                # Mask the logits to keep only the top X values
+                # Apply the mask to keep only the top X most different logits
                 masked_intermediate_logits = intermediate_logits.masked_select(mask).view(b, t, top_x)
                 print("Masked intermediate logits shape:", masked_intermediate_logits.shape)
                 masked_logits = logits.masked_select(mask).view(b, t, top_x)
@@ -184,6 +193,7 @@ class GPT(nn.Module):
             logits = None
 
         return logits, loss, ground_truth_loss, distill_loss
+
     
     def store_current_layer(self, prev_wte, prev_lm_head, prev_wpe):
         # Store the previous embedding, lm_head, and positional embeddings
