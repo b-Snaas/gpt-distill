@@ -184,7 +184,7 @@ class GPT(nn.Module):
                 print("Softmax output shape:", outp.shape)
                 distill_loss = F.cross_entropy(masked_logits, outp, reduction='mean')
 
-                loss = (ground_truth_loss + distill_loss) * 0.5
+                loss = (ground_truth_loss * 0.9 + distill_loss * 0.1)
         else:
             logits = self.student_lm_head(current_x[:, [-1], :])
             loss = None
