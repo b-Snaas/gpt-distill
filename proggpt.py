@@ -291,7 +291,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             model.transformer.wte.load_state_dict(prev_model.transformer.wte.state_dict())
             model.lm_head.load_state_dict(prev_model.lm_head.state_dict())
         
-        model = torch.compile(model)
+        model = torch.compile(model, backend="aot_eager")
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
@@ -320,9 +320,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 10000, 100, 0.0004), 
-        (6, 20000, 80, 0.0003),
-        (9, 30000, 60, 0.0002),
+        (3, 10000, 80, 0.0004), 
+        (6, 20000, 70, 0.0003),
+        (9, 30000, 50, 0.0002),
         (12, 40000, 40, 0.00018)
     ]
 
@@ -340,8 +340,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     instances_seen = 0  # Initialize counter for instances seen
     step = 0
-    steps_in_current_schedule = 0
-    local_step = 0  # New variable to keep track of iterations within the current stage
 
     for step in range(num_iterations + 1):
         if step >= current_iters:
@@ -349,8 +347,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Move to the next depth stage
                 current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
-                steps_in_current_schedule = 0
-                local_step = 0  # Reset local step
 
                 # Free up the memory used by the old model and optimizer
                 prev_model = model
