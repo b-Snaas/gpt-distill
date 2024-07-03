@@ -281,7 +281,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
     num_vocab = 50257
-    model_config = GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=768),
+    model_config = GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=768)
 
     model = GPT(model_config)
     model = model.train().cuda()
