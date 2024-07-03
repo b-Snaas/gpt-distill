@@ -241,12 +241,12 @@ class DataLoader:
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
-            model_path= None, 
+            model_path=None, 
             model="d12", 
             sequence_length=1024, 
             num_iterations=200000, 
             learning_rate=0.00018, 
-            warmup_iters=2560,
+            warmup_iters=500,
             warmdown_iters=20000,
             weight_decay=0.1,
             val_loss_every=1280, 
@@ -301,18 +301,19 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     if hasattr(config, "coordinate_descent_tuning"):
         config.coordinate_descent_tuning = True # suggested by @Chillee
 
-    # learning rate decay scheduler (linear warmup and warmdown)
-    def get_lr(it):
-        assert it <= num_iterations
+    # learning rate decay scheduler (linear warmup and final warmdown)
+    def get_lr(it, stage_start_iter, current_stage_iters, is_final_stage):
+        stage_progress = it - stage_start_iter
+        assert stage_progress <= current_stage_iters
         # 1) linear warmup for warmup_iters steps
-        if it < warmup_iters:
-            return learning_rate * (it+1) / warmup_iters
-        # 2) constant lr for a while
-        elif it < num_iterations - warmdown_iters:
+        if stage_progress < warmup_iters:
+            return learning_rate * (stage_progress + 1) / warmup_iters
+        # 2) constant lr for most of the stage
+        elif not is_final_stage or stage_progress < current_stage_iters - warmdown_iters:
             return learning_rate
-        # 3) linear warmdown
+        # 3) linear warmdown (only in the final stage)
         else:
-            decay_ratio = (num_iterations - it) / warmdown_iters
+            decay_ratio = (current_stage_iters - stage_progress) / warmdown_iters
             return learning_rate * decay_ratio
 
     timings = []
@@ -326,12 +327,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         (12, 168000, 40, 0.00018)
     ]
 
-     # initialize the first model and optimizer
-    current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
+    # initialize the first model and optimizer
+    current_depth, current_stage_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
+    stage_start_iter = 0
     model = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
 
-        # load tokens
+    # load tokens
     train_loader = DataLoader(input_bin, current_batch_size, sequence_length)
     val_loader = None
     if input_val_bin:
@@ -342,11 +344,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     step = 0
 
     for step in range(num_iterations + 1):
-        if step >= current_iters:
+        if step >= stage_start_iter + current_stage_iters:
             if progressive_schedule:
                 # Move to the next depth stage
-                current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
-                current_iters += new_iters
+                current_depth, new_stage_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
+                stage_start_iter += current_stage_iters
+                current_stage_iters = new_stage_iters
 
                 # Free up the memory used by the old model and optimizer
                 prev_model = model
@@ -391,7 +394,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
         
-
         with ctx:
             _, loss = model(x, y, return_logits=False)
 
@@ -404,7 +406,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         for p in model.parameters():
             p.grad = p.grad / (p.grad.norm() + 1e-6)
         # determine and set the learning rate for this iteration
-        lr = get_lr(step)
+        is_final_stage = (len(progressive_schedule) == 0)
+        lr = get_lr(step, stage_start_iter, current_stage_iters, is_final_stage)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
