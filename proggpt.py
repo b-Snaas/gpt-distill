@@ -243,7 +243,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path= None, 
             model="d12", 
-            batch_size=45, 
             sequence_length=1024, 
             num_iterations=200000, 
             learning_rate=0.00018, 
@@ -260,7 +259,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "input_val_bin": input_val_bin,
         "output_dir": model_path,
         "model": model,
-        "batch_size": batch_size,
         "sequence_length": sequence_length,
         "num_iterations": num_iterations,
         "learning_rate": learning_rate,
@@ -270,9 +268,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "val_max_steps": val_max_steps,
     })
 
-    # args error checking and convenience variables
-    B, T = batch_size, sequence_length
-    assert 1 <= T <= 1024
 
     assert torch.cuda.is_available(), "CUDA is required"
     device = 'cuda:0'
