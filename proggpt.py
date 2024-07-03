@@ -322,8 +322,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     progressive_schedule = [
         (3, 4000, 40, 0.00018), 
         (6, 10000, 40, 0.00018),
-        (9, 16000, 40, 0.00018),
-        (12, 170000, 40, 0.00018)
+        (9, 18000, 40, 0.00018),
+        (12, 168000, 40, 0.00018)
     ]
 
      # initialize the first model and optimizer
