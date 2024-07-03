@@ -194,9 +194,9 @@ def _load_data_shard(filename):
 
 class DataLoader:
     def __init__(self, filename_pattern, B, T):
-        self.B = B
+        self.filename_pattern = filename_pattern
         self.T = T
-
+        self.set_batch_size(B)
         # glob files that match the pattern
         self.files = sorted(glob.glob(filename_pattern))
         assert len(self.files) > 0, f"did not find any files that match the pattern {filename_pattern}"
@@ -212,6 +212,9 @@ class DataLoader:
 
         # kick things off
         self.reset()
+
+    def set_batch_size(self, B):
+        self.B = B
 
     def reset(self):
         self.current_shard = 0
@@ -235,7 +238,6 @@ class DataLoader:
         if self.current_position + (B * T + 1) > len(self.tokens):
             self.advance()
         return x.cuda(), y.cuda()
-    
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
@@ -279,23 +281,33 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+    
 
     num_vocab = 50257
-    model_config = GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=768)
 
-    model = GPT(model_config)
-    model = model.train().cuda()
-    model = torch.compile(model)
+    def initialize_model(depth, prev_model=None):
+        model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=12, n_embd=768)
+        model = GPT(model_config)
+        model = model.train().cuda()
+        
+        if prev_model is not None:
+            # Copy transformer blocks
+            for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
+                model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
 
+            # copy embedding and lm_head
+            model.transformer.wte.load_state_dict(prev_model.transformer.wte.state_dict())
+            model.lm_head.load_state_dict(prev_model.lm_head.state_dict())
+        
+        model = torch.compile(model)
+        return model
+
+    def reinitialize_optimizer(model, learning_rate, weight_decay):
+        optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
+        return optimizer
+    
     if hasattr(config, "coordinate_descent_tuning"):
         config.coordinate_descent_tuning = True # suggested by @Chillee
-
-    # load tokens
-    train_loader = DataLoader(input_bin, B, T)
-    val_loader = None
-    if input_val_bin:
-        val_loader = DataLoader(input_val_bin, B, T)
-    x, y = train_loader.next_batch()
 
     # init the optimizer
     optimizer = model.configure_optimizers(weight_decay=weight_decay,
@@ -321,7 +333,58 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
 
+    # progressive training schedule
+    progressive_schedule = [
+        (3, 10000, 100, 0.0004), 
+        (6, 20000, 80, 0.0003),
+        (9, 30000, 60, 0.0002),
+        (12, 40000, 40, 0.00018)
+    ]
+
+     # initialize the first model and optimizer
+    current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
+    model = initialize_model(current_depth)
+    optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
+
+        # load tokens
+    train_loader = DataLoader(input_bin, current_batch_size, sequence_length)
+    val_loader = None
+    if input_val_bin:
+        val_loader = DataLoader(input_val_bin, current_batch_size, sequence_length)
+    x, y = train_loader.next_batch()
+
+    instances_seen = 0  # Initialize counter for instances seen
+    step = 0
+    steps_in_current_schedule = 0
+    local_step = 0  # New variable to keep track of iterations within the current stage
+
     for step in range(num_iterations + 1):
+        if step >= current_iters:
+            if progressive_schedule:
+                # Move to the next depth stage
+                current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
+                current_iters += new_iters
+                steps_in_current_schedule = 0
+                local_step = 0  # Reset local step
+
+                # Free up the memory used by the old model and optimizer
+                prev_model = model
+                del optimizer
+
+                # Initialize the new model with weights from the previous model
+                model = initialize_model(current_depth, prev_model)
+
+                optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
+                
+                # Set the batch size for the new stage
+                train_loader.set_batch_size(new_batch_size)
+                val_loader.set_batch_size(new_batch_size)
+
+                # Delete the previous model to free memory
+                del prev_model
+
+                current_lr = new_lr  # Update the current learning rate
+
         last_step = (step == num_iterations)
 
         # once in a while evaluate the validation dataset
@@ -370,7 +433,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # everything that follows now is just diagnostics, prints, logging, etc.
 
         torch.cuda.synchronize()
-
 
         lossf = loss.item() # keep track of the mean loss
         # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
