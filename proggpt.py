@@ -291,7 +291,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             model.transformer.wte.load_state_dict(prev_model.transformer.wte.state_dict())
             model.lm_head.load_state_dict(prev_model.lm_head.state_dict())
         
-        model = torch.compile(model, backend="aot_eager")
+        model = torch.compile(model)
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
@@ -320,7 +320,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 10000, 50, 0.00018), 
+        (3, 10000, 40, 0.00018), 
         (6, 20000, 40, 0.00018),
         (9, 30000, 40, 0.00018),
         (12, 40000, 40, 0.00018)
