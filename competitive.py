@@ -248,7 +248,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             warmup_iters=2560,
             warmdown_iters=20000,
             weight_decay=0.1,
-            val_loss_every=128, 
+            val_loss_every=1280, 
             val_max_steps=20,
             ):
 
