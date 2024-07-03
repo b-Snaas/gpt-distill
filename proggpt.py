@@ -276,9 +276,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
-    
-
-    num_vocab = 50257
 
     def initialize_model(depth, prev_model=None):
         model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=12, n_embd=768)
@@ -304,11 +301,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     if hasattr(config, "coordinate_descent_tuning"):
         config.coordinate_descent_tuning = True # suggested by @Chillee
 
-    # init the optimizer
-    optimizer = model.configure_optimizers(weight_decay=weight_decay,
-                                               learning_rate=learning_rate, betas=(0.9, 0.95),
-                                               device_type=device)
-
     # learning rate decay scheduler (linear warmup and warmdown)
     def get_lr(it):
         assert it <= num_iterations
@@ -322,8 +314,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         else:
             decay_ratio = (num_iterations - it) / warmdown_iters
             return learning_rate * decay_ratio
-
-    run_id = str(uuid.uuid4())
 
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
