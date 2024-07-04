@@ -11,11 +11,8 @@ import fire
 import numpy as np
 import torch
 from torch import nn
-import torch.distributed as dist
 import torch.nn.functional as F
 import torch._inductor.config as config
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
 
 with open(sys.argv[0]) as f:
     code = f.read()
