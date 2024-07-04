@@ -241,7 +241,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path= None, 
             model="d12", 
-            batch_size=35, 
+            batch_size=100, 
             sequence_length=1024, 
             num_iterations=200000, 
             learning_rate=0.00018, 
@@ -281,7 +281,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
     num_vocab = 50257
-    model_config = GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=768)
+    model_config = GPTConfig(vocab_size=num_vocab, n_layer=3, n_head=12, n_embd=768)
 
     model = GPT(model_config)
     model = model.train().cuda()
