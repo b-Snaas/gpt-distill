@@ -5,7 +5,7 @@ import math
 import glob
 from dataclasses import dataclass
 import time
-
+import gc
 import wandb
 import fire
 import numpy as np
