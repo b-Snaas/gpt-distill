@@ -239,6 +239,14 @@ class DataLoader:
         if self.current_position + (B * T + 1) > len(self.tokens):
             self.advance()
         return x.cuda(), y.cuda()
+    
+def clear_memory():
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    # Force GPU to release memory
+    torch.cuda.synchronize()
+
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
@@ -327,8 +335,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (2, 1000, 40, 0.00018),
-        (6, 5000, 40, 0.00018),
+        (1, 1000, 40, 0.00018),
         (12, 194000, 40, 0.00018)
     ]
 
@@ -360,6 +367,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 prev_model = model
                 del optimizer
 
+                clear_memory()
+
                 # Initialize the new model with weights from the previous model
                 model = initialize_model(current_depth, prev_model)
 
@@ -373,6 +382,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 del prev_model
 
                 current_lr = new_lr  # Update the current learning rate
+
+                clear_memory()
 
         last_step = (step == num_iterations)
 
