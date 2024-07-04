@@ -285,7 +285,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     model = GPT(model_config)
     model = model.train().cuda()
-    model = torch.compile(model)
 
     if hasattr(config, "coordinate_descent_tuning"):
         config.coordinate_descent_tuning = True # suggested by @Chillee
@@ -315,8 +314,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         else:
             decay_ratio = (num_iterations - it) / warmdown_iters
             return learning_rate * decay_ratio
-
-    run_id = str(uuid.uuid4())
 
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
