@@ -247,7 +247,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             sequence_length=1024, 
             num_iterations=200000, 
             learning_rate=0.00018, 
-            warmup_iters=500,
+            warmup_iters=100,
             warmdown_iters=20000,
             weight_decay=0.1,
             val_loss_every=1280, 
@@ -327,10 +327,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 100, 40, 0.00018), 
-        (6, 100, 40, 0.00018),
-        (9, 100, 40, 0.00018),
-        (12, 100, 40, 0.00018)
+        (1, 1000, 40, 0.00018), 
+        (12, 199000, 40, 0.00018)
     ]
 
     # initialize the first model and optimizer
