@@ -240,11 +240,10 @@ class DataLoader:
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path= None, 
-            model="d12", 
-            batch_size=20, 
+            batch_size=10, 
             sequence_length=512, 
             num_iterations=200000, 
-            learning_rate=0.00009, 
+            learning_rate=0.00005, 
             warmup_iters=500,
             warmdown_iters=20000,
             weight_decay=0.1,
@@ -371,7 +370,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
 
         lossf = loss.item() # keep track of the mean loss
-        # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         wandb.log({
             "train_loss": lossf, 
             "step": step, 
