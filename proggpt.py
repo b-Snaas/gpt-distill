@@ -4,6 +4,7 @@ import uuid
 import math
 import glob
 from dataclasses import dataclass
+import time
 
 import wandb
 import fire
@@ -291,7 +292,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             model.transformer.wte.load_state_dict(prev_model.transformer.wte.state_dict())
             model.lm_head.load_state_dict(prev_model.lm_head.state_dict())
         
+        compile_start_time = time.time()
         model = torch.compile(model)
+        compile_end_time = time.time()
+        compile_duration = compile_end_time - compile_start_time
+        print(f"Model compilation for depth {depth} took {compile_duration:.2f} seconds")
+        
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
@@ -321,10 +327,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 4000, 40, 0.00018), 
-        (6, 10000, 40, 0.00018),
-        (9, 18000, 40, 0.00018),
-        (12, 168000, 40, 0.00018)
+        (3, 100, 40, 0.00018), 
+        (6, 100, 40, 0.00018),
+        (9, 100, 40, 0.00018),
+        (12, 100, 40, 0.00018)
     ]
 
     # initialize the first model and optimizer
