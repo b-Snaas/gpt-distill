@@ -14,6 +14,11 @@ from torch import nn
 import torch.nn.functional as F
 import torch._inductor.config as config
 
+import torch._dynamo as dynamo
+from torch._inductor import config as inductor_config
+from torch._inductor.utils import has_triton
+import logging
+
 with open(sys.argv[0]) as f:
     code = f.read()
 
@@ -297,13 +302,31 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             model.transformer.wte.load_state_dict(prev_model.transformer.wte.state_dict())
             model.lm_head.load_state_dict(prev_model.lm_head.state_dict())
         
-        compile_start_time = time.time()
-        model = torch.compile(model)
-        compile_end_time = time.time()
-        compile_duration = compile_end_time - compile_start_time
-        print(f"Model compilation for depth {depth} took {compile_duration:.2f} seconds")
+        # Enable logging for torch.compile
+        torch._dynamo.config.log_level = logging.DEBUG
+        torch._inductor.config.trace.enabled = True
+        torch._inductor.config.trace.graph_diagram = True
+
+        # Define a sample input for tracing
+        sample_input = torch.randint(0, model_config.vocab_size, (1, sequence_length)).cuda()
         
-        return model
+        # Compile the model with tracing
+        compiled_model = torch.compile(model, backend="inductor", dynamic=True)
+        
+        # Run the compiled model once to trigger compilation
+        with torch.no_grad():
+            _ = compiled_model(sample_input)
+        
+        # Print compilation statistics
+        print(dynamo.utils.compile_times())
+        
+        # If Triton is available, print Triton-specific information
+        if has_triton():
+            from torch._inductor.triton_heuristics import triton_config
+            print("Triton configurations:")
+            print(triton_config)
+        
+        return compiled_model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
