@@ -14,11 +14,6 @@ from torch import nn
 import torch.nn.functional as F
 import torch._inductor.config as config
 
-import torch._dynamo as dynamo
-from torch._inductor import config as inductor_config
-from torch._inductor.utils import has_triton
-import logging
-
 with open(sys.argv[0]) as f:
     code = f.read()
 
@@ -248,6 +243,8 @@ def clear_memory():
     
     # Force GPU to release memory
     torch.cuda.synchronize()
+    
+    return
 
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
@@ -261,8 +258,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             warmdown_iters=20000,
             weight_decay=0.1,
             val_loss_every=1280, 
-            val_max_steps=20,
-            ):
+            val_max_steps=20):
 
     # Initialize wandb
     wandb.init(project="gpt2_distill", config={
@@ -288,45 +284,22 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
-    def initialize_model(depth, prev_model=None):
+    def initialize_model(depth, prev_model=False):
         model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=25, n_embd=1600)
         model = GPT(model_config)
         model = model.train().cuda()
         
-        if prev_model is not None:
-            # Copy transformer blocks
-            for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
-                model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
-
-            # copy embedding and lm_head
-            model.transformer.wte.load_state_dict(prev_model.transformer.wte.state_dict())
-            model.lm_head.load_state_dict(prev_model.lm_head.state_dict())
+        if prev_model:
+            # Load the saved state dict into the new model
+            model.load_state_dict(torch.load("temp_model.pt"), strict=False)
         
-        # Enable logging for torch.compile
-        torch._dynamo.config.log_level = logging.DEBUG
-        torch._inductor.config.trace.enabled = True
-        torch._inductor.config.trace.graph_diagram = True
-
-        # Define a sample input for tracing
-        sample_input = torch.randint(0, model_config.vocab_size, (1, sequence_length)).cuda()
+        compile_start_time = time.time()
+        model = torch.compile(model)
+        compile_end_time = time.time()
+        compile_duration = compile_end_time - compile_start_time
+        print(f"Model compilation for depth {depth} took {compile_duration:.2f} seconds")
         
-        # Compile the model with tracing
-        compiled_model = torch.compile(model, backend="inductor", dynamic=True)
-        
-        # Run the compiled model once to trigger compilation
-        with torch.no_grad():
-            _ = compiled_model(sample_input)
-        
-        # Print compilation statistics
-        print(dynamo.utils.compile_times())
-        
-        # If Triton is available, print Triton-specific information
-        if has_triton():
-            from torch._inductor.triton_heuristics import triton_config
-            print("Triton configurations:")
-            print(triton_config)
-        
-        return compiled_model
+        return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
@@ -355,8 +328,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 200, 10, 0.00025),
-        (48, 190000, 8, 0.00005),
+        (3, 200, 75, 0.00025),
+        (48, 190000, 10, 0.00005),
         (3, 10000, 75, 0.00025),
         (6, 10000, 70, 0.00025),
         (12, 10000, 50, 0.00020),
@@ -381,13 +354,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     steps_in_current_schedule = 0
 
     for step in range(num_iterations + 1):
-        if progressive_schedule and steps_in_current_schedule == current_stage_iters - 100:
-            next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
-            if train_loader.B != next_batch_size:
-                print(f"Switching to next batch size {next_batch_size} at step {step}")
-                train_loader.set_batch_size(next_batch_size)
-                val_loader.set_batch_size(next_batch_size)
-                current_lr = new_lr
         if step >= stage_start_iter + current_stage_iters:
             if progressive_schedule:
                 # Move to the next depth stage
@@ -396,25 +362,28 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_stage_iters = new_stage_iters
                 steps_in_current_schedule = 0
 
-                # Free up the memory used by the old model and optimizer
-                prev_model = model
-                del optimizer
+                # Save current model state to disk
+                torch.save(model.state_dict(), "temp_model.pt")
+                prev_model = True
 
+                # Free up the memory used by the old model and optimizer
+                del model
+                del optimizer
                 clear_memory()
 
-                # Initialize the new model with weights from the previous model
-                model = initialize_model(current_depth, prev_model)
-
+                # Initialize the new model
+                model = initialize_model(current_depth, prev_model=prev_model)
                 optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
                 # Set the batch size for the new stage
                 train_loader.set_batch_size(new_batch_size)
-                val_loader.set_batch_size(new_batch_size)
-
-                # Delete the previous model to free memory
-                del prev_model
+                if val_loader:
+                    val_loader.set_batch_size(new_batch_size)
 
                 current_lr = new_lr  # Update the current learning rate
+
+                os.remove("temp_model.pt")
+                prev_model = False
 
                 clear_memory()
 
@@ -452,8 +421,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         instances_seen += x.size(0)
         loss.backward()
 
+        # normalize gradients
         for p in model.parameters():
             p.grad = p.grad / (p.grad.norm() + 1e-6)
+        
         # determine and set the learning rate for this iteration
         is_final_stage = (len(progressive_schedule) == 0)
         lr = get_lr(step, stage_start_iter, current_stage_iters, is_final_stage)
@@ -468,7 +439,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         torch.cuda.synchronize()
 
         lossf = loss.item() # keep track of the mean loss
-        # print0(f"step {step+1:4d}/{num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
         wandb.log({
             "train_loss": lossf, 
             "step": step, 
@@ -477,7 +447,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
-
     steps_in_current_schedule += 1
 
 if __name__ == "__main__":
