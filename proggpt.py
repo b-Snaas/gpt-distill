@@ -352,6 +352,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     instances_seen = 0  # Initialize counter for instances seen
     step = 0
     steps_in_current_schedule = 0
+    batches_since_transition = 0
 
     for step in range(num_iterations + 1):
         if progressive_schedule and steps_in_current_schedule == current_stage_iters - 100:
@@ -382,10 +383,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 model = initialize_model(current_depth, prev_model=prev_model)
                 optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
-                # Set the batch size for the new stage
-                train_loader.set_batch_size(new_batch_size)
+                # Set the initial batch size to 50% of the new stage's batch size
+                half_batch_size = new_batch_size // 2
+                train_loader.set_batch_size(half_batch_size)
                 if val_loader:
-                    val_loader.set_batch_size(new_batch_size)
+                    val_loader.set_batch_size(half_batch_size)
 
                 current_lr = new_lr  # Update the current learning rate
 
@@ -393,6 +395,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 prev_model = False
 
                 clear_memory()
+
+                # Reset batch counter since transition
+                batches_since_transition = 0
 
         last_step = (step == num_iterations)
 
@@ -451,6 +456,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "step": step, 
             "instances_seen": instances_seen,
         })  # Log training loss, instances seen, and timings to wandb
+
+        # Update batch size after 100 batches since transition
+        batches_since_transition += 1
+        if batches_since_transition == 100:
+            clear_memory()
+            train_loader.set_batch_size(new_batch_size)
+            if val_loader:
+                val_loader.set_batch_size(new_batch_size)
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
