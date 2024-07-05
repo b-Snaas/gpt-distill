@@ -353,6 +353,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     step = 0
     steps_in_current_schedule = 0
     batches_since_transition = 0
+    new_schedule = False
 
     for step in range(num_iterations + 1):
         if progressive_schedule and steps_in_current_schedule == current_stage_iters - 100:
@@ -398,6 +399,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Reset batch counter since transition
                 batches_since_transition = 0
+                new_schedule = True
 
         last_step = (step == num_iterations)
 
@@ -459,7 +461,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         # Update batch size after 100 batches since transition
         batches_since_transition += 1
-        if batches_since_transition == 100:
+        if batches_since_transition == 100 and new_schedule:
             clear_memory()
             train_loader.set_batch_size(new_batch_size)
             if val_loader:
