@@ -238,13 +238,13 @@ class DataLoader:
         return x.cuda(), y.cuda()
     
 def clear_memory():
-    time.sleep(60)
+    # time.sleep(60)
     gc.collect()
     torch.cuda.empty_cache()
     
     # Force GPU to release memory
     torch.cuda.synchronize()
-    time.sleep(60)
+    # time.sleep(60)
     
     return
 
@@ -330,7 +330,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 1000, 70, 0.00025),
+        (3, 200, 70, 0.00025),
         (48, 190000, 10, 0.00007),
         (6, 2000, 70, 0.00025),
         (12, 8000, 50, 0.00020),
@@ -358,13 +358,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     new_schedule = False
 
     for step in range(num_iterations + 1):
-        if progressive_schedule and steps_in_current_schedule == current_stage_iters - 500:
-            next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
-            if train_loader.B != next_batch_size:
-                print(f"Switching to next batch size {next_batch_size} at step {step}")
-                train_loader.set_batch_size(next_batch_size)
-                val_loader.set_batch_size(next_batch_size)
-                current_lr = new_lr
+        # if progressive_schedule and steps_in_current_schedule == current_stage_iters - 500:
+        #     next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
+        #     if train_loader.B != next_batch_size:
+        #         print(f"Switching to next batch size {next_batch_size} at step {step}")
+        #         train_loader.set_batch_size(next_batch_size)
+        #         val_loader.set_batch_size(next_batch_size)
+        #         current_lr = new_lr
         if step >= stage_start_iter + current_stage_iters:
             if progressive_schedule:
                 # Move to the next depth stage
@@ -386,8 +386,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 model = initialize_model(current_depth, prev_model=prev_model)
                 optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
-                # Set the initial batch size to 50% of the new stage's batch size
-                half_batch_size = new_batch_size // 10
+                half_batch_size = new_batch_size
                 train_loader.set_batch_size(half_batch_size)
                 if val_loader:
                     val_loader.set_batch_size(half_batch_size)
@@ -461,13 +460,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "instances_seen": instances_seen,
         })  # Log training loss, instances seen, and timings to wandb
 
-        # Update batch size after 100 batches since transition
-        batches_since_transition += 1
-        if batches_since_transition == 100 and new_schedule:
-            clear_memory()
-            train_loader.set_batch_size(new_batch_size)
-            if val_loader:
-                val_loader.set_batch_size(new_batch_size)
+        # # Update batch size after 100 batches since transition
+        # batches_since_transition += 1
+        # if batches_since_transition == 100 and new_schedule:
+        #     clear_memory()
+        #     train_loader.set_batch_size(new_batch_size)
+        #     if val_loader:
+        #         val_loader.set_batch_size(new_batch_size)
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
