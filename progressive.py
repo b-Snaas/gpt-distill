@@ -354,14 +354,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     x, y = train_loader.next_batch()
 
     timings = []
-    instances_seen = 0  # Initialize counter for instances seen
+    instances_seen = 0
     step = 0
     steps_in_current_schedule = 0
+    steps_in_prev_schedules = 0
     local_step = 0
-    prev_iters = 0
 
     while step < num_iterations:
-        if progressive_schedule and steps_in_current_schedule == new_iters - 10:
+        if progressive_schedule and (steps_in_current_schedule + steps_in_prev_schedules) == current_iters - 10:
             next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
             if train_loader.B != next_batch_size:
                 print(f"Switching to next batch size {next_batch_size} at step {step}")
@@ -370,10 +370,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_lr = new_lr
         if step >= current_iters:
             if progressive_schedule:
-                # Move to the next depth stage
-
                 current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
+                steps_in_prev_schedules += steps_in_current_schedule
                 steps_in_current_schedule = 0
                 local_step = 0  # Reset local step
 
