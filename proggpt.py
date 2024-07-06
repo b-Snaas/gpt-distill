@@ -238,12 +238,13 @@ class DataLoader:
         return x.cuda(), y.cuda()
     
 def clear_memory():
+    time.sleep(60)
     gc.collect()
     torch.cuda.empty_cache()
     
     # Force GPU to release memory
     torch.cuda.synchronize()
-    time.sleep(3)
+    time.sleep(60)
     
     return
 
