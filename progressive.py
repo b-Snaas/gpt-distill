@@ -390,6 +390,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Delete the previous model to free memory
                 del prev_model
 
+                stage_start_iter = step
                 current_lr = new_lr  # Update the current learning rate
 
                 clear_memory()
