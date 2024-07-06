@@ -299,8 +299,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             # Copy embedding weights (this will also update lm_head due to weight sharing)
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
 
-        model = torch.compile(model)
-
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
@@ -352,13 +350,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     local_step = 0  # New variable to keep track of iterations within the current stage
 
     while step < num_iterations:
-        # if progressive_schedule and steps_in_current_schedule == current_iters - 100:
-        #     next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
-        #     if train_loader.B != next_batch_size:
-        #         print(f"Switching to next batch size {next_batch_size} at step {step}")
-        #         train_loader.set_batch_size(next_batch_size)
-        #         val_loader.set_batch_size(next_batch_size)
-        #         current_lr = new_lr
+        if progressive_schedule and steps_in_current_schedule == current_iters - 100:
+            next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
+            if train_loader.B != next_batch_size:
+                print(f"Switching to next batch size {next_batch_size} at step {step}")
+                train_loader.set_batch_size(next_batch_size)
+                val_loader.set_batch_size(next_batch_size)
+                current_lr = new_lr
         if step >= current_iters:
             if progressive_schedule:
                 # Move to the next depth stage
