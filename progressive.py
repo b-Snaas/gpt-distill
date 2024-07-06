@@ -260,7 +260,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             learning_rate=0.0018, 
             warmup_iters=256, 
             weight_decay=0.1,
-            val_loss_every=128, 
+            val_loss_every=1280, 
             val_max_steps=20,
             ):
 
@@ -307,7 +307,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (3, 200, 90, 0.0025), 
+        (3, 1000, 90, 0.0030), 
         (48, 50000, 20, 0.0009)
     ]
 
@@ -350,13 +350,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     local_step = 0  # New variable to keep track of iterations within the current stage
 
     while step < num_iterations:
-        if progressive_schedule and steps_in_current_schedule == current_iters - 100:
-            next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
-            if train_loader.B != next_batch_size:
-                print(f"Switching to next batch size {next_batch_size} at step {step}")
-                train_loader.set_batch_size(next_batch_size)
-                val_loader.set_batch_size(next_batch_size)
-                current_lr = new_lr
+        # if progressive_schedule and steps_in_current_schedule == current_iters - 100:
+        #     next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
+        #     if train_loader.B != next_batch_size:
+        #         print(f"Switching to next batch size {next_batch_size} at step {step}")
+        #         train_loader.set_batch_size(next_batch_size)
+        #         val_loader.set_batch_size(next_batch_size)
+        #         current_lr = new_lr
         if step >= current_iters:
             if progressive_schedule:
                 # Move to the next depth stage
