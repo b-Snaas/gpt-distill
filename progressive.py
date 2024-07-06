@@ -298,6 +298,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
             # Copy embedding weights (this will also update lm_head due to weight sharing)
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
+        
+        model = torch.compile(model)
 
         return model
 
