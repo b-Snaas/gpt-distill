@@ -5,23 +5,48 @@ import math
 import glob
 from dataclasses import dataclass
 import time
-
+import gc
+import wandb
+import fire
 import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-
-import fire
-import wandb
-import gc
-
-torch.set_float32_matmul_precision('high')
+import torch._inductor.config as config
 
 with open(sys.argv[0]) as f:
     code = f.read()
 
 # -----------------------------------------------------------------------------
 # PyTorch nn.Module definitions for the GPT-2 model
+
+class Rotary(torch.nn.Module):
+    def __init__(self, dim, base=10000):
+        super().__init__()
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+        self.seq_len_cached = None
+        self.cos_cached = None
+        self.sin_cached = None
+
+    def forward(self, x):
+        seq_len = x.shape[1]
+        if seq_len != self.seq_len_cached:
+            self.seq_len_cached = seq_len
+            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
+            freqs = torch.outer(t, self.inv_freq).to(x.device)
+            self.cos_cached = freqs.cos()
+            self.sin_cached = freqs.sin()
+        return self.cos_cached[None, :, None, :], self.sin_cached[None, :, None, :]
+
+def apply_rotary_emb(x, cos, sin):
+    assert x.ndim == 4 # multihead attention
+    d = x.shape[3]//2
+    x1 = x[..., :d]
+    x2 = x[..., d:]
+    y1 = x1 * cos + x2 * sin
+    y2 = x1 * (-sin) + x2 * cos
+    return torch.cat([y1, y2], 3)
 
 def rmsnorm(x0, eps=1e-6):
     x = x0.float()
@@ -32,24 +57,28 @@ class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=False)
-        # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
-        # regularization
         self.n_head = config.n_head
         self.n_embd = config.n_embd
+        self.head_dim = self.n_embd // self.n_head
+        assert self.n_embd % self.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=False)
+        # output projection
+        self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.rotary = Rotary(self.head_dim)
 
     def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         qkv = self.c_attn(x)
         q, k, v = qkv.split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        k = k.view(B, T, self.n_head, self.head_dim)
+        q = q.view(B, T, self.n_head, self.head_dim)
+        v = v.view(B, T, self.n_head, self.head_dim)
+        cos, sin = self.rotary(q)
+        q = apply_rotary_emb(q, cos, sin)
+        k = apply_rotary_emb(k, cos, sin)
+        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=True)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         # output projection
         y = self.c_proj(y)
@@ -86,142 +115,54 @@ class Block(nn.Module):
 
 @dataclass
 class GPTConfig:
-    block_size: int = 1024
     vocab_size: int = 50257
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
 
 class GPT(nn.Module):
+
     def __init__(self, config):
         super().__init__()
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
         ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.transformer.wte.weight = self.lm_head.weight
 
-        # Add student embedding and lm_head
-        self.student_wte = nn.Embedding(config.vocab_size, config.n_embd)
-        self.student_wpe = nn.Embedding(config.block_size, config.n_embd)
-        self.student_lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.student_lm_head.LLMC_SKIP_INIT = 1
-        self.student_wte.weight = self.student_lm_head.weight
-
-        # Store previous embedding, lm_head, and positional embeddings
-        self.prev_wte = None
-        self.prev_lm_head = None
-        self.prev_wpe = None
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    def forward(self, idx, targets=None, return_logits=True, previous_depth=None, distillation_mode=False, top_x=10000):
+    def forward(self, idx, targets=None, return_logits=True):
         b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
 
-        current_tok_emb = self.student_wte(idx)
-        pos_emb = self.student_wpe(pos)
-        current_x = current_tok_emb + pos_emb
+        # forward the GPT model itself
+        x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
 
-        intermediate_logits = None
-        distill_loss = None
-        intermediate_loss = None
-
-        for i, block in enumerate(self.transformer.h):
-            if distillation_mode and i < previous_depth:
-                with torch.no_grad():
-                    current_x = block(current_x)
-                    intermediate_logits = self.student_lm_head(rmsnorm(current_x))
-                    print(f"Intermediate logits shape at block {i}:", intermediate_logits.shape)
-            else:
-                current_x = block(current_x)
-
-        current_x = rmsnorm(current_x)
-        print("Final layer normalized output shape:", current_x.shape)
+        for block in self.transformer.h:
+            x = block(x)
+        x = rmsnorm(x)
 
         if targets is not None:
-            # Use student or teacher lm_head based on the flag for current run
-            logits = self.student_lm_head(current_x)
-            print("Logits shape:", logits.shape)
-
-            ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-
-            if not distillation_mode:
-                loss = ground_truth_loss
-
-            # Combine with previous logits loss if distillation mode is on
-            if distillation_mode:
-                # Compute the absolute difference between intermediate_logits and logits
-                diff_logits = torch.abs(intermediate_logits - logits)
-                print("Difference logits shape:", diff_logits.shape)
-
-                # Sum the differences across the batch and sequence dimensions
-                aggregated_diff = diff_logits.sum(dim=(0, 1))
-                print("Aggregated difference shape:", aggregated_diff.shape)
-
-                # Get the top X indices for the most different logits in the vocabulary
-                topk_indices = torch.topk(aggregated_diff, top_x, dim=-1).indices
-                print("Topk indices shape:", topk_indices.shape)
-
-                # Create a mask for the top X most different logits
-                mask = torch.zeros_like(aggregated_diff, dtype=torch.bool).scatter_(0, topk_indices, True)
-                mask = mask.unsqueeze(0).unsqueeze(0).expand_as(diff_logits)  # Expand mask to the shape of diff_logits
-                print("Mask shape:", mask.shape)
-
-                # Apply the mask to keep only the top X most different logits
-                masked_intermediate_logits = intermediate_logits.masked_select(mask).view(b, t, top_x)
-                print("Masked intermediate logits shape:", masked_intermediate_logits.shape)
-                masked_logits = logits.masked_select(mask).view(b, t, top_x)
-                print("Masked logits shape:", masked_logits.shape)
-
-                # Compute the distillation loss using masked logits
-                outp = F.softmax(masked_intermediate_logits, dim=-1).detach()
-                print("Softmax output shape:", outp.shape)
-                distill_loss = F.cross_entropy(masked_logits, outp, reduction='mean')
-
-                loss = (ground_truth_loss * 0.9 + distill_loss * 0.1)
+            # if we are given some desired targets also calculate the loss
+            logits = self.lm_head(x)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            logits = self.student_lm_head(current_x[:, [-1], :])
+            # inference-time mini-optimization: only forward the lm_head on the very last position
+            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
+        # there are performance reasons why not returning logits is prudent, if not needed
         if not return_logits:
             logits = None
 
-        return logits, loss, ground_truth_loss, distill_loss
-
-    
-    def store_current_layer(self, prev_wte, prev_lm_head, prev_wpe):
-        # Store the previous embedding, lm_head, and positional embeddings
-        self.prev_wte = prev_wte
-        self.prev_lm_head = prev_lm_head
-        self.prev_wpe = prev_wpe
-    
-    def discard_stored_layers(self):
-        self.prev_wte = None
-        self.prev_lm_head = None
-        self.prev_wpe = None
-
+        return logits, loss
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
-        # Always optimize student parameters and shared transformer blocks
-        params_to_optimize = (
-            list(self.student_wte.parameters()) +
-            list(self.student_wpe.parameters()) +
-            list(self.student_lm_head.parameters()) +
-            list(self.transformer.h.parameters())
-        )
-        
-        optimizer = torch.optim.AdamW(params_to_optimize, lr=learning_rate, weight_decay=weight_decay, betas=betas)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
         return optimizer
-
-# -----------------------------------------------------------------------------
-# Our own simple Data Loader
-
+    
 def _peek_data_shard(filename):
     # only reads the header, returns header data
     with open(filename, "rb") as f:
@@ -345,38 +286,20 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
-    # Add variables to track the previous validation loss, depth, and distillation mode
-    previous_val_loss = None
-    best_val_loss = float('inf')
-
     def initialize_model(depth, prev_model=None):
         model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=depth, n_head=16, n_embd=1024)
         model = GPT(model_config)
         model = model.train().cuda()
         
         if prev_model is not None:
-            with torch.no_grad():
-                # Copy transformer blocks
-                for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
-                    model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
+            # Copy transformer blocks
+            for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
+                model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
 
-                # copy student embedding + positional embedding and lm_head
-                model.student_wte.load_state_dict(prev_model.student_wte.state_dict())
-                model.student_lm_head.load_state_dict(prev_model.student_lm_head.state_dict())
+            # Copy embedding weights (this will also update lm_head due to weight sharing)
+            model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
 
-                
-                # Store the previous embedding + lm_head + positional embeddings in the new model
-                # model.store_current_layer(prev_model.student_wte, prev_model.student_lm_head, prev_model.transformer.wpe)
-
-            previous_depth = len(prev_model.transformer.h)  # Record the previous model's depth
-            distillation_mode = True  # Turn on distillation mode
-            print("Turning distillation mode on")
-        else:
-            print("Distillation mode off")
-            distillation_mode = False
-            previous_depth = None
-
-        return model, distillation_mode, previous_depth
+        return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
@@ -399,7 +322,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # initialize the first model and optimizer
     current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
-    model, distillation_mode, previous_depth = initialize_model(current_depth)
+    model = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
 
     # load tokens
@@ -449,8 +372,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 clear_memory()
 
                 # Initialize the new model with weights from the previous model
-                model, distillation_mode, previous_depth = initialize_model(current_depth, prev_model)
-                previous_val_loss = best_val_loss
+                model = initialize_model(current_depth, prev_model)
                 optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
                 # Set the batch size for the new stage
@@ -475,31 +397,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_ground = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    _, loss, val_ground_truth, val_distill = model(
+                    _, loss = model(
                     x_val, y_val, 
                     return_logits=False, 
-                    previous_depth=previous_depth, 
-                    distillation_mode=distillation_mode
                 )
                 val_loss /= val_max_steps
 
-            # Update best validation loss
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
 
-            # Turn off distillation mode if we surpass the previous best validation loss
-            if distillation_mode and val_loss < previous_val_loss:
-                print("Turning distillation mode off because of better validation loss")
-                model.discard_stored_layers()
-                distillation_mode = False
-            # log to console and to file
-
-            if distillation_mode:
-                val_ground += val_ground_truth.item()
-                wandb.log({"val_loss": val_ground, "step": step})
-            else:
-                val_loss += loss.item()
-                wandb.log({"val_loss": val_loss, "step": step})
+            val_loss += loss.item()
+            wandb.log({"val_loss": val_loss, "step": step})
 
         if step == num_iterations:
             break
@@ -510,11 +416,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # forward pass
         forward_start = time.time()
         with ctx:
-            _, loss, ground_truth_loss, distill_loss = model(
+            _, loss = model(
                 x, y, 
                 return_logits=False, 
-                previous_depth=previous_depth, 
-                distillation_mode=distillation_mode
             )
         forward_end = time.time()
         forward_time = forward_end - forward_start
@@ -548,38 +452,18 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
-        start_cuda_sync = time.time()
         torch.cuda.synchronize()
-        end_cuda_sync = time.time()
-        cuda_sync_time = end_cuda_sync - start_cuda_sync
+
         # time and print
         t1 = time.time()
         lossf = loss.item() # keep track of the mean loss
 
-        if distillation_mode:
 
-            log_dict = {
-                "train_loss": ground_truth_loss.item(), 
-                "step": step, 
-                "instances_seen": instances_seen,
-                "batch_time": t1 - t0,
-                "forward_time": forward_time,
-                "backward_time": backward_time,
-                "cuda_sync_time": cuda_sync_time,
-                "batch_process_time": batch_time,
-                "distillation_loss": distill_loss.item(),
-            }
-        else:
-            log_dict = {
-                "train_loss": lossf, 
-                "step": step, 
-                "instances_seen": instances_seen,
-                "batch_time": t1 - t0,
-                "forward_time": forward_time,
-                "backward_time": backward_time,
-                "cuda_sync_time": cuda_sync_time,
-                "batch_process_time": batch_time,
-            }
+        log_dict = {
+            "train_loss": lossf, 
+            "step": step, 
+            "instances_seen": instances_seen,
+        }
 
 
         wandb.log(log_dict)
