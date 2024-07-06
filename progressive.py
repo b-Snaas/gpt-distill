@@ -251,6 +251,7 @@ def print0(*args, **kwargs):
     # modified print that only prints from the master process
     # if this is not a distributed run, it's just a print
     print(*args, **kwargs)
+    
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
@@ -259,6 +260,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             num_iterations=12288, 
             learning_rate=0.0018, 
             warmup_iters=256, 
+            warmdown_iters=20000,
             weight_decay=0.1,
             val_loss_every=1280, 
             val_max_steps=20,
@@ -273,6 +275,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "num_iterations": num_iterations,
         "learning_rate": learning_rate,
         "warmup_iters": warmup_iters,
+        "warmdown_iters": warmdown_iters,
         "weight_decay": weight_decay,
         "val_loss_every": val_loss_every,
         "val_max_steps": val_max_steps,
@@ -306,11 +309,26 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
         return optimizer
+    
+        # learning rate decay scheduler (linear warmup and final warmdown)
+    def get_lr(it, stage_start_iter, current_stage_iters, is_final_stage):
+        stage_progress = it - stage_start_iter
+        assert stage_progress <= current_stage_iters
+        # 1) linear warmup for warmup_iters steps
+        if stage_progress < warmup_iters:
+            return learning_rate * (stage_progress + 1) / warmup_iters
+        # 2) constant lr for most of the stage
+        elif not is_final_stage or stage_progress < current_stage_iters - warmdown_iters:
+            return learning_rate
+        # 3) linear warmdown (only in the final stage)
+        else:
+            decay_ratio = (current_stage_iters - stage_progress) / warmdown_iters
+            return learning_rate * decay_ratio
 
     # progressive training schedule
     progressive_schedule = [
         (3, 1000, 95, 0.0030), 
-        (48, 50000, 25, 0.0009)
+        (48, 50000, 25, 0.00015)
     ]
 
     # Calculate total iterations in the progressive schedule
@@ -324,6 +342,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # initialize the first model and optimizer
     current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
+    stage_start_iter = 0
     model = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
 
@@ -333,17 +352,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     if input_val_bin:
         val_loader = DataLoader(input_val_bin, current_batch_size, sequence_length)
     x, y = train_loader.next_batch()
-
-    # learning rate decay scheduler
-    def get_lr(local_step, total_iters, current_lr):
-        assert local_step <= total_iters
-        # 1) linear warmup for warmup_iters steps
-        if local_step < warmup_iters:
-            return current_lr * (local_step + 1) / warmup_iters
-        # 2) linear decay down to min learning rate
-        decay_ratio = (local_step - warmup_iters) / (total_iters - warmup_iters)
-        assert 0 <= decay_ratio <= 1
-        return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * current_lr
 
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
@@ -415,26 +423,17 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
         
-        # forward pass
-        forward_start = time.time()
         with ctx:
             _, loss = model(
                 x, y, 
                 return_logits=False, 
             )
-        forward_end = time.time()
-        forward_time = forward_end - forward_start
-        
-        start_batch = time.time() 
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
         # Increment the counter for instances seen
         instances_seen += x.size(0)
-        end_batch = time.time()
-        batch_time = end_batch - start_batch
 
-        # backward pass
-        backward_start = time.time()
+
         loss.backward()
 
         # Gradient normalization
@@ -442,15 +441,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if p.grad is not None:
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
         # determine and set the learning rate for this iteration
-        lr = get_lr(local_step, num_iterations, current_lr)
+        # determine and set the learning rate for this iteration
+        is_final_stage = (len(progressive_schedule) == 0)
+        lr = get_lr(step, stage_start_iter, current_stage_iters, is_final_stage)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
-        backward_end = time.time()
-        backward_time = backward_end - backward_start
-
+ 
         # --------------- TRAINING SECTION END -------------------
         # everything that follows now is just diagnostics, prints, logging, etc.
 
