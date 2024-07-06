@@ -287,18 +287,22 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
-    def initialize_model(depth, prev_model=None):
+    def initialize_model(depth, prev_model=False):
         model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=16, n_embd=1024)
         model = GPT(model_config)
         model = model.train().cuda()
-        
-        if prev_model is not None:
-            # Copy transformer blocks
-            for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
-                model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
 
-            # Copy embedding weights (this will also update lm_head due to weight sharing)
-            model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
+        if prev_model:
+            # Load the saved state dict into the new model
+            model.load_state_dict(torch.load("temp_model.pt"), strict=False)
+        
+        # if prev_model is not None:
+        #     # Copy transformer blocks
+        #     for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
+        #         model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
+
+        #     # Copy embedding weights (this will also update lm_head due to weight sharing)
+        #     model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
         
         model = torch.compile(model)
 
@@ -373,9 +377,13 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 steps_in_current_schedule = 0
                 local_step = 0  # Reset local step
 
-                # Free up the memory used by the old model and optimizer
-                prev_model = model
-                del optimizer
+                # Save current model state to disk
+                torch.save(model.state_dict(), "temp_model.pt")
+                prev_model = True
+
+                # # Free up the memory used by the old model and optimizer
+                # prev_model = model
+                # del optimizer
 
                 clear_memory()
 
@@ -391,6 +399,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 del prev_model
 
                 current_lr = new_lr  # Update the current learning rate
+
+                os.remove("temp_model.pt")
+                prev_model = False
 
                 clear_memory()
 
