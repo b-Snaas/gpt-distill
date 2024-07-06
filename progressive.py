@@ -257,8 +257,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path=None,  
             sequence_length=512, 
-            num_iterations=12288, 
-            learning_rate=0.0018, 
+            num_iterations=12288,
             warmup_iters=256, 
             warmdown_iters=20000,
             weight_decay=0.1,
@@ -273,7 +272,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "output_dir": model_path,
         "sequence_length": sequence_length,
         "num_iterations": num_iterations,
-        "learning_rate": learning_rate,
         "warmup_iters": warmup_iters,
         "warmdown_iters": warmdown_iters,
         "weight_decay": weight_decay,
@@ -311,19 +309,19 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         return optimizer
     
     # learning rate decay scheduler (linear warmup and final warmdown)
-    def get_lr(it, stage_start_iter, current_iters, is_final_stage):
+    def get_lr(it, stage_start_iter, current_iters, is_final_stage, current_lr):
         stage_progress = it - stage_start_iter
         assert stage_progress <= current_iters
         # 1) linear warmup for warmup_iters steps
         if stage_progress < warmup_iters:
-            return learning_rate * (stage_progress + 1) / warmup_iters
+            return current_lr * (stage_progress + 1) / warmup_iters
         # 2) constant lr for most of the stage
         elif not is_final_stage or stage_progress < current_iters - warmdown_iters:
-            return learning_rate
+            return current_lr
         # 3) linear warmdown (only in the final stage)
         else:
             decay_ratio = (current_iters - stage_progress) / warmdown_iters
-            return learning_rate * decay_ratio
+            return current_lr * decay_ratio
 
     # progressive training schedule
     progressive_schedule = [
@@ -441,7 +439,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         # determine and set the learning rate for this iteration
         is_final_stage = (len(progressive_schedule) == 0)
-        lr = get_lr(step, stage_start_iter, current_iters, is_final_stage)
+        lr = get_lr(step, stage_start_iter, current_iters, is_final_stage, current_lr)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
