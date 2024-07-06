@@ -310,19 +310,19 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
         return optimizer
     
-        # learning rate decay scheduler (linear warmup and final warmdown)
-    def get_lr(it, stage_start_iter, current_stage_iters, is_final_stage):
+    # learning rate decay scheduler (linear warmup and final warmdown)
+    def get_lr(it, stage_start_iter, current_iters, is_final_stage):
         stage_progress = it - stage_start_iter
-        assert stage_progress <= current_stage_iters
+        assert stage_progress <= current_iters
         # 1) linear warmup for warmup_iters steps
         if stage_progress < warmup_iters:
             return learning_rate * (stage_progress + 1) / warmup_iters
         # 2) constant lr for most of the stage
-        elif not is_final_stage or stage_progress < current_stage_iters - warmdown_iters:
+        elif not is_final_stage or stage_progress < current_iters - warmdown_iters:
             return learning_rate
         # 3) linear warmdown (only in the final stage)
         else:
-            decay_ratio = (current_stage_iters - stage_progress) / warmdown_iters
+            decay_ratio = (current_iters - stage_progress) / warmdown_iters
             return learning_rate * decay_ratio
 
     # progressive training schedule
@@ -408,13 +408,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
                     _, loss = model(
-                    x_val, y_val, 
-                    return_logits=False, 
-                )
+                        x_val, y_val, 
+                        return_logits=False, 
+                    )
+                    val_loss += loss.item()
                 val_loss /= val_max_steps
 
-
-            val_loss += loss.item()
             wandb.log({"val_loss": val_loss, "step": step})
 
         if step == num_iterations:
@@ -433,17 +432,16 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # Increment the counter for instances seen
         instances_seen += x.size(0)
 
-
         loss.backward()
 
         # Gradient normalization
         for p in model.parameters():
             if p.grad is not None:
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
-        # determine and set the learning rate for this iteration
+
         # determine and set the learning rate for this iteration
         is_final_stage = (len(progressive_schedule) == 0)
-        lr = get_lr(step, stage_start_iter, current_stage_iters, is_final_stage)
+        lr = get_lr(step, stage_start_iter, current_iters, is_final_stage)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
@@ -459,13 +457,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         t1 = time.time()
         lossf = loss.item() # keep track of the mean loss
 
-
         log_dict = {
             "train_loss": lossf, 
             "step": step, 
             "instances_seen": instances_seen,
+            "lr": lr,
         }
-
 
         wandb.log(log_dict)
 
@@ -479,8 +476,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
-    print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
-    print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
+    print(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
+    print(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
 
 if __name__ == "__main__":
     fire.Fire(train)
