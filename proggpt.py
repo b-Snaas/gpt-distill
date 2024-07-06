@@ -385,7 +385,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
                 # Set the initial batch size to 50% of the new stage's batch size
-                half_batch_size = new_batch_size // 2
+                half_batch_size = new_batch_size // 10
                 train_loader.set_batch_size(half_batch_size)
                 if val_loader:
                     val_loader.set_batch_size(half_batch_size)
