@@ -311,14 +311,18 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
-        # Only optimize parameters that require gradients
+        # Use the existing configure_optimizers method
         optimizer = model.configure_optimizers(
-            weight_decay=weight_decay, 
-            learning_rate=learning_rate, 
-            betas=(0.9, 0.95), 
-            device_type=device,
-            params=[p for p in model.parameters() if p.requires_grad]
+            weight_decay=weight_decay,
+            learning_rate=learning_rate,
+            betas=(0.9, 0.95),
+            device_type='cuda'  # Assuming CUDA is always used, adjust if necessary
         )
+        
+        # After creating the optimizer, filter out parameters that don't require gradients
+        for param_group in optimizer.param_groups:
+            param_group['params'] = [p for p in param_group['params'] if p.requires_grad]
+        
         return optimizer
     
     # learning rate decay scheduler (linear warmup and final warmdown)
