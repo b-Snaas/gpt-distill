@@ -333,7 +333,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     total_scheduled_iters = sum(iters for _, iters, _, _ in progressive_schedule)
 
     # initialize the first model and optimizer
-    current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
+    current_iters = 0
+    current_depth, new_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
+    current_iters += new_iters
     warmdown_iters = int(0.1 * current_iters)
     stage_start_iter = 0
     model = initialize_model(current_depth)
