@@ -310,19 +310,22 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         assert stage_progress <= current_iters
         # 1) linear warmup for warmup_iters steps
         if stage_progress < warmup_iters:
+            print(f"WARMING UP iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
             return current_lr * (stage_progress + 1) / warmup_iters
         # 2) constant lr for most of the stage
         elif stage_progress < current_iters - warmdown_iters:
+            print(f"NORMAL iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
             return current_lr
         # 3) linear warmdown
         else:
+            print(f"WARMING DOWN iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
             decay_ratio = (current_iters - stage_progress) / warmdown_iters
             return current_lr * decay_ratio
 
     # progressive training schedule
     progressive_schedule = [
-        (6, 1500, 85, 0.0009),
-        (12, 2000, 65, 0.0007),
+        (6, 100, 85, 0.0009),
+        (12, 200, 65, 0.0007),
         (24, 10000, 45, 0.00045),
         (48, 186500, 25, 0.0002)
     ]
