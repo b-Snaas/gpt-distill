@@ -256,8 +256,7 @@ def print0(*args, **kwargs):
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path=None,  
-            sequence_length=512, 
-            num_iterations=12288,
+            sequence_length=512,
             warmup_iters=256, 
             warmdown_iters=20000,
             weight_decay=0.1,
@@ -271,7 +270,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "input_val_bin": input_val_bin,
         "output_dir": model_path,
         "sequence_length": sequence_length,
-        "num_iterations": num_iterations,
         "warmup_iters": warmup_iters,
         "warmdown_iters": warmdown_iters,
         "weight_decay": weight_decay,
@@ -325,20 +323,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (6, 1000, 85, 0.001),
-        (12, 2000, 65, 0.0008),
-        (24, 70000, 45, 0.0006),
-        (48, 190000, 25, 0.0003)
+        # (6, 1000, 85, 0.001),
+        # (12, 2000, 65, 0.0008),
+        (24, 10000, 45, 0.0005),
+        (48, 190000, 25, 0.0002)
     ]
 
     # Calculate total iterations in the progressive schedule
     total_scheduled_iters = sum(iters for _, iters, _, _ in progressive_schedule)
-
-    # Adjust the schedule if num_iterations is larger
-    if num_iterations > total_scheduled_iters:
-        last_depth, _, last_batch_size, last_lr = progressive_schedule[-1]
-        extra_iters = num_iterations - total_scheduled_iters
-        progressive_schedule.append((last_depth, extra_iters, last_batch_size, last_lr))
 
     # initialize the first model and optimizer
     current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
