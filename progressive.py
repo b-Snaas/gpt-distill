@@ -256,7 +256,7 @@ def print0(*args, **kwargs):
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path=None,  
-            sequence_length=256,
+            sequence_length=512,
             warmup_iters=256, 
             warmdown_iters=20000,
             weight_decay=0.1,
@@ -294,16 +294,31 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             # Copy transformer blocks
             for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
                 model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
+                
+                # Freeze the parameters of the copied layers
+                for param in model.transformer.h[i].parameters():
+                    param.requires_grad = False
 
             # Copy embedding weights (this will also update lm_head due to weight sharing)
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
+            
+            # Optionally, freeze the embedding layer if desired
+            # for param in model.transformer.wte.parameters():
+            #     param.requires_grad = False
         
         model = torch.compile(model)
 
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
-        optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
+        # Only optimize parameters that require gradients
+        optimizer = model.configure_optimizers(
+            weight_decay=weight_decay, 
+            learning_rate=learning_rate, 
+            betas=(0.9, 0.95), 
+            device_type=device,
+            params=[p for p in model.parameters() if p.requires_grad]
+        )
         return optimizer
     
     # learning rate decay scheduler (linear warmup and final warmdown)
@@ -323,9 +338,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (6, 2000, 75, 0.0008),
-        (48, 198000, 20, 0.0002),
-        (12, 2000, 65, 0.0008),
+        (6, 2000, 85, 0.0009),
+        (12, 2000, 65, 0.0007),
         (24, 10000, 45, 0.00045),
         (48, 198000, 25, 0.0002)
     ]
