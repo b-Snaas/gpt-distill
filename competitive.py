@@ -240,7 +240,7 @@ class DataLoader:
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path= None, 
-            batch_size=50, 
+            batch_size=48, 
             sequence_length=512, 
             num_iterations=200000, 
             learning_rate=0.00045, 
