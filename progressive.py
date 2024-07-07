@@ -258,7 +258,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             model_path=None,  
             sequence_length=512,
             warmup_iters=256, 
-            warmdown_iters=20000,
             weight_decay=0.1,
             val_loss_every=1280, 
             val_max_steps=20,
@@ -271,7 +270,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "output_dir": model_path,
         "sequence_length": sequence_length,
         "warmup_iters": warmup_iters,
-        "warmdown_iters": warmdown_iters,
         "weight_decay": weight_decay,
         "val_loss_every": val_loss_every,
         "val_max_steps": val_max_steps,
@@ -294,58 +292,39 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             # Copy transformer blocks
             for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
                 model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
-                
-                # Freeze the parameters of the copied layers
-                for param in model.transformer.h[i].parameters():
-                    param.requires_grad = False
 
             # Copy embedding weights (this will also update lm_head due to weight sharing)
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
-            
-            # Optionally, freeze the embedding layer if desired
-            # for param in model.transformer.wte.parameters():
-            #     param.requires_grad = False
         
         model = torch.compile(model)
 
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
-        # Use the existing configure_optimizers method
-        optimizer = model.configure_optimizers(
-            weight_decay=weight_decay,
-            learning_rate=learning_rate,
-            betas=(0.9, 0.95),
-            device_type='cuda'  # Assuming CUDA is always used, adjust if necessary
-        )
-        
-        # After creating the optimizer, filter out parameters that don't require gradients
-        for param_group in optimizer.param_groups:
-            param_group['params'] = [p for p in param_group['params'] if p.requires_grad]
-        
+        optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
         return optimizer
     
     # learning rate decay scheduler (linear warmup and final warmdown)
-    def get_lr(it, stage_start_iter, current_iters, is_final_stage, current_lr):
+    def get_lr(it, stage_start_iter, current_iters, warmdown_iters, current_lr):
         stage_progress = it - stage_start_iter
         assert stage_progress <= current_iters
         # 1) linear warmup for warmup_iters steps
         if stage_progress < warmup_iters:
             return current_lr * (stage_progress + 1) / warmup_iters
         # 2) constant lr for most of the stage
-        elif not is_final_stage or stage_progress < current_iters - warmdown_iters:
+        elif stage_progress < current_iters - warmdown_iters:
             return current_lr
-        # 3) linear warmdown (only in the final stage)
+        # 3) linear warmdown
         else:
             decay_ratio = (current_iters - stage_progress) / warmdown_iters
             return current_lr * decay_ratio
 
     # progressive training schedule
     progressive_schedule = [
-        (6, 2000, 85, 0.0009),
-        (12, 5000, 65, 0.0007),
+        (6, 1500, 85, 0.0009),
+        (12, 2000, 65, 0.0007),
         (24, 10000, 45, 0.00045),
-        (48, 183000, 25, 0.0002)
+        (48, 186500, 25, 0.0002)
     ]
 
     # Calculate total iterations in the progressive schedule
@@ -353,6 +332,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # initialize the first model and optimizer
     current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
+    warmdown_iters = int(0.1 * current_iters)
     stage_start_iter = 0
     model = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
@@ -385,6 +365,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if progressive_schedule:
                 current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
+                warmdown_iters = int(0.1 * new_iters)
                 steps_in_prev_schedules += steps_in_current_schedule
                 steps_in_current_schedule = 0
                 local_step = 0  # Reset local step
@@ -456,7 +437,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         # determine and set the learning rate for this iteration
         is_final_stage = (len(progressive_schedule) == 0)
-        lr = get_lr(step, stage_start_iter, current_iters, is_final_stage, current_lr)
+        lr = get_lr(step, stage_start_iter, current_iters, warmdown_iters, current_lr)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
