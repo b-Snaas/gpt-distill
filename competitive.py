@@ -240,7 +240,7 @@ class DataLoader:
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path= None, 
-            batch_size=45, 
+            batch_size=50, 
             sequence_length=512, 
             num_iterations=200000, 
             learning_rate=0.00045, 
@@ -279,7 +279,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
     num_vocab = 50257
-    model_config = GPTConfig(vocab_size=50257, n_layer=48, n_head=16, n_embd=1024)
+    model_config = GPTConfig(vocab_size=50257, n_layer=24, n_head=16, n_embd=1024)
 
     model = GPT(model_config)
     model = model.train().cuda()
