@@ -257,6 +257,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path=None,  
             sequence_length=512,
+            warmup_iters=250,
             weight_decay=0.1,
             val_loss_every=1280, 
             val_max_steps=20,
@@ -308,22 +309,22 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         assert stage_progress <= current_iters
         # 1) linear warmup for warmup_iters steps
         if stage_progress < warmup_iters:
-            print(f"WARMING UP iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
+            # print(f"WARMING UP iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
             return current_lr * (stage_progress + 1) / warmup_iters
         # 2) constant lr for most of the stage
         elif stage_progress < current_iters - warmdown_iters:
-            print(f"NORMAL iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
+            # print(f"NORMAL iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
             return current_lr
         # 3) linear warmdown
         else:
-            print(f"WARMING DOWN iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
+            # print(f"WARMING DOWN iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
             decay_ratio = (current_iters - stage_progress) / warmdown_iters
             return current_lr * decay_ratio
 
     # progressive training schedule
     progressive_schedule = [
-        (6, 100, 85, 0.0009),
-        (12, 200, 65, 0.0007),
+        (6, 1000, 85, 0.0009),
+        (12, 3000, 65, 0.0007),
         (24, 10000, 45, 0.00045),
         (48, 186500, 25, 0.0002)
     ]
@@ -334,7 +335,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # initialize the first model and optimizer
     current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
     warmdown_iters = int(0.1 * current_iters)
-    warmup_iters = int(0.01 * current_iters)
     stage_start_iter = 0
     model = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
@@ -368,7 +368,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
                 warmdown_iters = int(0.1 * new_iters)
-                warmup_iters = int(0.01 * new_iters)
                 steps_in_prev_schedules += steps_in_current_schedule
                 steps_in_current_schedule = 0
                 local_step = 0  # Reset local step
@@ -438,9 +437,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if p.grad is not None:
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
 
-        # determine and set the learning rate for this iteration
-        is_final_stage = (len(progressive_schedule) == 0)
-        lr = get_lr(step, stage_start_iter, current_iters, warmdown_iters, current_lr)
+        lr = get_lr(step, stage_start_iter, new_iters, warmdown_iters, current_lr)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
