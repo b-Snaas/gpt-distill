@@ -323,9 +323,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        # (6, 1000, 85, 0.001),
+        # (6, 1500, 85, 0.0009),
         # (12, 2000, 65, 0.0008),
-        (24, 10000, 45, 0.0005),
+        (24, 10000, 45, 0.00045),
         (48, 190000, 25, 0.0002)
     ]
 
@@ -351,6 +351,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     steps_in_current_schedule = 0
     steps_in_prev_schedules = 0
     local_step = 0
+
+    num_iterations = total_scheduled_iters
 
     while step < num_iterations:
         if progressive_schedule and (steps_in_current_schedule + steps_in_prev_schedules) == current_iters - 10:
