@@ -257,7 +257,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path=None,  
             sequence_length=512,
-            warmup_iters=256, 
             weight_decay=0.1,
             val_loss_every=1280, 
             val_max_steps=20,
@@ -269,7 +268,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         "input_val_bin": input_val_bin,
         "output_dir": model_path,
         "sequence_length": sequence_length,
-        "warmup_iters": warmup_iters,
         "weight_decay": weight_decay,
         "val_loss_every": val_loss_every,
         "val_max_steps": val_max_steps,
@@ -336,6 +334,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # initialize the first model and optimizer
     current_depth, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
     warmdown_iters = int(0.1 * current_iters)
+    warmup_iters = int(0.01 * current_iters)
     stage_start_iter = 0
     model = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
@@ -369,6 +368,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
                 warmdown_iters = int(0.1 * new_iters)
+                warmup_iters = int(0.01 * new_iters)
                 steps_in_prev_schedules += steps_in_current_schedule
                 steps_in_current_schedule = 0
                 local_step = 0  # Reset local step
