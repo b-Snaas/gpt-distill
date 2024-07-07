@@ -323,10 +323,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (6, 1000, 85, 0.0009),
-        (12, 3000, 65, 0.0007),
-        (24, 10000, 45, 0.00045),
-        (48, 186500, 25, 0.0002)
+        (24, 100000, 45, 0.00045),
+        (48, 100000, 25, 0.0002)
     ]
 
     # Calculate total iterations in the progressive schedule
@@ -336,7 +334,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     current_iters = 0
     current_depth, new_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
     current_iters += new_iters
-    warmdown_iters = int(0.1 * current_iters)
+    warmdown_iters = int(0.2 * current_iters)
     stage_start_iter = 0
     model = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
@@ -369,10 +367,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if progressive_schedule:
                 current_depth, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
-                warmdown_iters = int(0.1 * new_iters)
+                warmdown_iters = int(0.2 * new_iters)
                 steps_in_prev_schedules += steps_in_current_schedule
                 steps_in_current_schedule = 0
-                local_step = 0  # Reset local step
+                local_step = 0
 
                 # Free up the memory used by the old model and optimizer
                 prev_model = model
