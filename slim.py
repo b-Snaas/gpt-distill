@@ -504,6 +504,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             "step": step, 
             "instances_seen": instances_seen,
             "lr": lr,
+            "batch_size": train_loader.B,
         }
 
         wandb.log(log_dict)
