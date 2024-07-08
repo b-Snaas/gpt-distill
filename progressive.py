@@ -272,17 +272,18 @@ def print0(*args, **kwargs):
 
 def print_model_details(model):
     print(f"GPT Model Structure:")
-    print(f"  Embedding layer: input size = {model.config.vocab_size}, output size = {model.config.n_embd}")
-    print(f"  Number of transformer layers: {model.config.n_layer}")
-    print(f"  Number of attention heads per layer: {model.config.n_head}")
-    print(f"  Embedding dimension: {model.config.n_embd}")
-    print(f"  Language model head: input size = {model.config.orig_embd}, output size = {model.config.vocab_size}")
+    print(f"  Embedding layer: input size = {model.transformer.wte.num_embeddings}, output size = {model.transformer.wte.embedding_dim}")
+    print(f"  Number of transformer layers: {len(model.transformer.h)}")
+    print(f"  Language model head: input size = {model.lm_head.in_features}, output size = {model.lm_head.out_features}")
+    
+    if hasattr(model.transformer, 'proj'):
+        print(f"  Projection layer: input size = {model.transformer.proj.in_features}, output size = {model.transformer.proj.out_features}")
     
     for i, layer in enumerate(model.transformer.h):
         print(f"  Transformer layer {i + 1}:")
-        print(f"    Input dimension: {model.config.n_embd}")
-        print(f"    Output dimension: {model.config.n_embd}")
-        print(f"    Number of attention heads: {model.config.n_head}")
+        print(f"    Input dimension: {layer.mlp.c_fc.in_features}")
+        print(f"    Output dimension: {layer.mlp.c_proj.out_features}")
+        print(f"    Number of attention heads: {layer.attn.n_head}")
     
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
