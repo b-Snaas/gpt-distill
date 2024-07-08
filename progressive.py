@@ -323,8 +323,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (12, 12, 768, 100, 40, 0.00018),
-        (24, 9, 576, 100, 20, 0.0001)
+        (12, 12, 768, 1000, 40, 0.00018),
+        (24, 9, 576, 1000, 20, 0.0001)
     ]
 
     # Calculate total iterations in the progressive schedule
@@ -357,7 +357,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     while step < num_iterations:
         if progressive_schedule and (steps_in_current_schedule + steps_in_prev_schedules) == current_iters - 10:
-            next_depth, _, next_batch_size, new_lr = progressive_schedule[0]
+            next_depth, _, _ , _ , next_batch_size, new_lr = progressive_schedule[0]
             if train_loader.B != next_batch_size:
                 print(f"Switching to next batch size {next_batch_size} at step {step}")
                 train_loader.set_batch_size(next_batch_size)
