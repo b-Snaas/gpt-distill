@@ -120,6 +120,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
+    orig_embd: int = 768
 
 class GPT(nn.Module):
 
@@ -129,14 +130,16 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.orig_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight
 
         if copy_layers is not None:
             for i, layer in enumerate(copy_layers):
                 self.transformer.h[i] = layer
+            if config.n_embd != config.orig_embd:
+                self.transformer.proj = nn.Linear(config.n_embd, config.orig_embd)
 
     def forward(self, idx, targets=None, return_logits=True):
         b, t = idx.size()
@@ -147,6 +150,10 @@ class GPT(nn.Module):
 
         for block in self.transformer.h:
             x = block(x)
+
+        if self.config.n_embd != self.config.orig_embd:
+            x = self.transformer.proj(x)
+
         x = rmsnorm(x)
 
         if targets is not None:
@@ -256,6 +263,20 @@ def print0(*args, **kwargs):
     # modified print that only prints from the master process
     # if this is not a distributed run, it's just a print
     print(*args, **kwargs)
+
+def print_model_details(model):
+    print(f"GPT Model Structure:")
+    print(f"  Embedding layer: input size = {model.config.vocab_size}, output size = {model.config.n_embd}")
+    print(f"  Number of transformer layers: {model.config.n_layer}")
+    print(f"  Number of attention heads per layer: {model.config.n_head}")
+    print(f"  Embedding dimension: {model.config.n_embd}")
+    print(f"  Language model head: input size = {model.config.orig_embd}, output size = {model.config.vocab_size}")
+    
+    for i, layer in enumerate(model.transformer.h):
+        print(f"  Transformer layer {i + 1}:")
+        print(f"    Input dimension: {model.config.n_embd}")
+        print(f"    Output dimension: {model.config.n_embd}")
+        print(f"    Number of attention heads: {model.config.n_head}")
     
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
@@ -288,17 +309,18 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
     def initialize_model(depth, prev_model=None, copy_layers=None, n_head=12, n_embd=768):
-        model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=n_head, n_embd=n_embd)
+        orig_embd = prev_model.config.orig_embd if prev_model else n_embd
+        model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=n_head, n_embd=n_embd, orig_embd=orig_embd)
         model = GPT(model_config, copy_layers=copy_layers)
         model = model.train().cuda()
 
         if prev_model is not None:
             # Copy embedding weights (this will also update lm_head due to weight sharing)
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
-        
+
         model = torch.compile(model)
         return model
-
+    
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
         return optimizer
@@ -338,6 +360,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     stage_start_iter = 0
     model = initialize_model(current_depth, n_head=current_head, n_embd=current_embd)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
+
+    print_model_details(model)
 
     # load tokens
     train_loader = DataLoader(input_bin, current_batch_size, sequence_length)
@@ -394,6 +418,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_lr = new_lr  # Update the current learning rate
 
                 clear_memory()
+
+                print_model_details(model)
 
         t0 = time.time()
 
