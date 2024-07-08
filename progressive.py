@@ -283,7 +283,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
     def initialize_model(depth, prev_model=None):
-        model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=16, n_embd=1024)
+        model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=8, n_embd=512)
         model = GPT(model_config)
         model = model.train().cuda()
         
@@ -323,8 +323,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (24, 100000, 45, 0.00045),
-        (48, 100000, 25, 0.0001)
+        (12, 200, 80, 0.0008),
+        (24, 200, 40, 0.0002)
     ]
 
     # Calculate total iterations in the progressive schedule
