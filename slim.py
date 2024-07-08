@@ -147,7 +147,6 @@ class GPT(nn.Module):
         if config.n_embd != config.orig_embd:
             self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
             self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
-            self.transformer.proj_up.weight = self.transformer.proj_down.weight.t()
 
 
     def forward(self, idx, targets=None, return_logits=True):
