@@ -145,7 +145,10 @@ class GPT(nn.Module):
         self.transformer.wte.weight = self.lm_head.weight
 
         if config.n_embd != config.orig_embd:
-            self.transformer.proj = nn.Linear(config.n_embd, config.orig_embd)
+            self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
+            self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
+            self.transformer.proj_up.weight = self.transformer.proj_down.weight.t()
+
 
     def forward(self, idx, targets=None, return_logits=True):
         b, t = idx.size()
@@ -154,11 +157,13 @@ class GPT(nn.Module):
         # forward the GPT model itself
         x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
 
-        for block in self.transformer.h:
+        for i, block in enumerate(self.transformer.h):
             x = block(x)
+            if i == 11 and self.config.n_embd != self.config.orig_embd:
+                x = self.transformer.proj_down(x)  # Project back up after 12th layer
 
         if self.config.n_embd != self.config.orig_embd:
-            x = self.transformer.proj(x)
+            x = self.transformer.proj_up(x)  # Final projection up
 
         x = rmsnorm(x)
 
