@@ -113,39 +113,25 @@ class Block(nn.Module):
 # -----------------------------------------------------------------------------
 # The main GPT-2 model
 
-
 @dataclass
 class GPTConfig:
     vocab_size: int = 50257
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    orig_embd: int = 768
 
 class GPT(nn.Module):
-    def __init__(self, config, prev_config=None):
+
+    def __init__(self, config):
         super().__init__()
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.orig_embd),
-            h = nn.ModuleList()
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
         ))
-
-        # Initialize layers
-        for i in range(config.n_layer):
-            if prev_config and i < prev_config.n_layer:
-                # Use previous configuration for copied layers
-                self.transformer.h.append(Block(prev_config))
-            else:
-                # Use new configuration for new layers
-                self.transformer.h.append(Block(config))
-
-        self.lm_head = nn.Linear(config.orig_embd, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight
-
-        if config.n_embd != config.orig_embd:
-            self.transformer.proj = nn.Linear(config.n_embd, config.orig_embd)
 
     def forward(self, idx, targets=None, return_logits=True):
         b, t = idx.size()
@@ -156,10 +142,6 @@ class GPT(nn.Module):
 
         for block in self.transformer.h:
             x = block(x)
-
-        if self.config.n_embd != self.config.orig_embd:
-            x = self.transformer.proj(x)
-
         x = rmsnorm(x)
 
         if targets is not None:
@@ -269,27 +251,12 @@ def print0(*args, **kwargs):
     # modified print that only prints from the master process
     # if this is not a distributed run, it's just a print
     print(*args, **kwargs)
-
-def print_model_details(model):
-    print(f"GPT Model Structure:")
-    print(f"  Embedding layer: input size = {model.transformer.wte.num_embeddings}, output size = {model.transformer.wte.embedding_dim}")
-    print(f"  Number of transformer layers: {len(model.transformer.h)}")
-    print(f"  Language model head: input size = {model.lm_head.in_features}, output size = {model.lm_head.out_features}")
-    
-    if hasattr(model.transformer, 'proj'):
-        print(f"  Projection layer: input size = {model.transformer.proj.in_features}, output size = {model.transformer.proj.out_features}")
-    
-    for i, layer in enumerate(model.transformer.h):
-        print(f"  Transformer layer {i + 1}:")
-        print(f"    Input dimension: {layer.mlp.c_fc.in_features}")
-        print(f"    Output dimension: {layer.mlp.c_proj.out_features}")
-        print(f"    Number of attention heads: {layer.attn.n_head}")
     
 
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path=None,  
-            sequence_length=1024,
+            sequence_length=512,
             warmup_iters=250,
             weight_decay=0.1,
             val_loss_every=1280, 
@@ -315,27 +282,21 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # set up a context manager following the desired dtype and device
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
-    def initialize_model(depth, prev_model=None, n_head=12, n_embd=768):
-        if prev_model:
-            orig_embd = prev_model.config.orig_embd
-            prev_config = prev_model.config
-        else:
-            orig_embd = n_embd
-            prev_config = None
-
-        model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=n_head, n_embd=n_embd, orig_embd=orig_embd)
-        model = GPT(model_config, prev_config)
+    def initialize_model(depth, prev_model=None):
+        model_config = GPTConfig(vocab_size=50257, n_layer=depth, n_head=8, n_embd=512)
+        model = GPT(model_config)
         model = model.train().cuda()
-
-        if prev_model:
-            # Copy weights for the first 12 layers
-            for i in range(min(12, len(prev_model.transformer.h))):
+        
+        if prev_model is not None:
+            # Copy transformer blocks
+            for i in range(min(len(prev_model.transformer.h), len(model.transformer.h))):
                 model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
-            
-            # Copy embedding weights
-            model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
 
+            # Copy embedding weights (this will also update lm_head due to weight sharing)
+            model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
+        
         model = torch.compile(model)
+
         return model
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
@@ -362,23 +323,21 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (12, 12, 768, 1000, 1, 0.00018),
-        (24, 9, 576, 1000, 1, 0.0001)
+        (12, 30000, 20000, 85, 0.0006),
+        (24, 50000, 20000, 70, 0.0003),
+        (36, 80000, 20000, 50, 0.0001)
     ]
 
     # Calculate total iterations in the progressive schedule
-    total_scheduled_iters = sum(iters for _, _, _, iters, _, _ in progressive_schedule)
+    total_scheduled_iters = sum(iters for _, iters, _, _, _ in progressive_schedule)
 
     # initialize the first model and optimizer
     current_iters = 0
-    current_depth, current_head, current_embd, new_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
+    current_depth, new_iters, warmdown_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
     current_iters += new_iters
-    warmdown_iters = int(0.2 * current_iters)
     stage_start_iter = 0
-    model = initialize_model(current_depth, n_head=current_head, n_embd=current_embd)
+    model = initialize_model(current_depth)
     optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
-
-    print_model_details(model)
 
     # load tokens
     train_loader = DataLoader(input_bin, current_batch_size, sequence_length)
@@ -398,7 +357,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     while step < num_iterations:
         if progressive_schedule and (steps_in_current_schedule + steps_in_prev_schedules) == current_iters - 10:
-            next_depth, _, _ , _ , next_batch_size, new_lr = progressive_schedule[0]
+            next_depth, _, _, next_batch_size, new_lr = progressive_schedule[0]
             if train_loader.B != next_batch_size:
                 print(f"Switching to next batch size {next_batch_size} at step {step}")
                 train_loader.set_batch_size(next_batch_size)
@@ -406,20 +365,20 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_lr = new_lr
         if step >= current_iters:
             if progressive_schedule:
-                prev_model = model
-                current_depth, current_head, current_embd, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
+                current_depth, new_iters, warmdown_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
-                warmdown_iters = int(0.2 * new_iters)
                 steps_in_prev_schedules += steps_in_current_schedule
                 steps_in_current_schedule = 0
                 local_step = 0
 
+                # Free up the memory used by the old model and optimizer
+                prev_model = model
                 del optimizer
 
                 clear_memory()
 
                 # Initialize the new model with weights from the previous model
-                model = initialize_model(current_depth, prev_model=prev_model, n_head=current_head, n_embd=current_embd)
+                model = initialize_model(current_depth, prev_model)
                 optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
                 # Set the batch size for the new stage
@@ -433,8 +392,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_lr = new_lr  # Update the current learning rate
 
                 clear_memory()
-
-                print_model_details(model)
 
         t0 = time.time()
 
