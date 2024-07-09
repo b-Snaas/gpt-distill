@@ -331,46 +331,22 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model = GPT(model_config, prev_config)
         model = model.train().cuda()
 
+        copied_layers = set()
         if prev_model:
             # Copy weights for the first 12 layers
             for i in range(min(12, len(prev_model.transformer.h))):
                 model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
+                copied_layers.add(f'transformer.h.{i}')
             
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
+            copied_layers.add('transformer.wte')
 
         model = torch.compile(model)
-        return model
-
-    def reinitialize_optimizer(model, learning_rate, weight_decay, is_first_init=False):
-        if is_first_init:
-            # For the first initialization, use a single parameter group
-            optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.95))
-        else:
-            # For subsequent initializations, separate parameters into two groups
-            copied_params = []
-            new_params = []
-            
-            for name, param in model.named_parameters():
-                if 'transformer.h' in name:
-                    layer_num = int(name.split('.')[2])  # Extract layer number
-                    if layer_num < 12:  # Assuming first 12 layers are copied
-                        copied_params.append(param)
-                    else:
-                        new_params.append(param)
-                elif 'transformer.wte' in name or 'lm_head' in name:
-                    copied_params.append(param)
-                else:
-                    new_params.append(param)  # All other parameters (e.g., embeddings, output layer) treated as new
-
-            # Create parameter groups with different learning rates
-            param_groups = [
-                {'params': copied_params, 'lr': learning_rate * 0.1},
-                {'params': new_params, 'lr': learning_rate}
-            ]
-
-            optimizer = torch.optim.AdamW(param_groups, lr=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.95))
-
+        return model, copied_layers
+    
+    def reinitialize_optimizer(model, learning_rate, weight_decay):
+        optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
         return optimizer
     
     # learning rate decay scheduler (linear warmup and final warmdown)
@@ -406,8 +382,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     current_iters += new_iters
     warmdown_iters = int(0.2 * current_iters)
     stage_start_iter = 0
-    model = initialize_model(current_depth, n_head=current_head, n_embd=current_embd)
-    optimizer = reinitialize_optimizer(model, current_lr, weight_decay, is_first_init=True)
+    model, copied_layers = initialize_model(current_depth, n_head=current_head, n_embd=current_embd)
+    optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
+
+    print(f"copied layers: {copied_layers}")
 
     print_model_details(model)
 
@@ -450,8 +428,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 clear_memory()
 
                 # Initialize the new model with weights from the previous model
-                model = initialize_model(current_depth, prev_model=prev_model, n_head=current_head, n_embd=current_embd)
-                optimizer = reinitialize_optimizer(model, current_lr, weight_decay, is_first_init=False)
+                model, copied_layers = initialize_model(current_depth, prev_model=prev_model, n_head=current_head, n_embd=current_embd)
+                print(f"copied layers: {copied_layers}")
+                optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
                 # Set the batch size for the new stage
                 train_loader.set_batch_size(new_batch_size)
@@ -511,8 +490,35 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
 
         lr = get_lr(step, stage_start_iter, new_iters, warmdown_iters, current_lr)
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
+
+        for i, param_group in enumerate(optimizer.param_groups):
+            scaled_params = []
+            full_lr_params = []
+            
+            for name, _ in param_group['params']:
+                if any(name.startswith(layer) for layer in copied_layers):
+                    scaled_params.append(name)
+                else:
+                    full_lr_params.append(name)
+            
+            if scaled_params:
+                param_group['lr'] = lr * 0.1  # 0.1x learning rate for copied layers
+                if step % 100 == 0:
+                    print(f"  Group {i}: Scaled LR = {param_group['lr']:.6f} (Copied layers)")
+                    print("    Scaled parameters:")
+                    for param_name in scaled_params:
+                        print(f"      {param_name}")
+            else:
+                param_group['lr'] = lr  # Full learning rate for new layers
+                if step % 100 == 0:
+                    print(f"  Group {i}: Full LR = {param_group['lr']:.6f} (New layers)")
+                    print("    Full LR parameters:")
+                    for param_name in full_lr_params:
+                        print(f"      {param_name}")
+
+            if step % 100 == 0:
+                print()  # Add an empty line for better readability between groups
+
         # step the optimizer
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
