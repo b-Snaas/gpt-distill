@@ -369,7 +369,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     ]
 
     # Calculate total iterations in the progressive schedule
-    total_scheduled_iters = sum(iters for _, _, _, iters, _, _ in progressive_schedule)
+    total_scheduled_iters = sum(iters for iters, _, _ in progressive_schedule)
 
     # initialize the first model and optimizer
     current_iters = 0
