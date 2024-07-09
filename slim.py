@@ -342,8 +342,35 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model = torch.compile(model)
         return model
 
-    def reinitialize_optimizer(model, learning_rate, weight_decay):
-        optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
+    def reinitialize_optimizer(model, learning_rate, weight_decay, is_first_init=False):
+        if is_first_init:
+            # For the first initialization, use a single parameter group
+            optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.95))
+        else:
+            # For subsequent initializations, separate parameters into two groups
+            copied_params = []
+            new_params = []
+            
+            for name, param in model.named_parameters():
+                if 'transformer.h' in name:
+                    layer_num = int(name.split('.')[2])  # Extract layer number
+                    if layer_num < 12:  # Assuming first 12 layers are copied
+                        copied_params.append(param)
+                    else:
+                        new_params.append(param)
+                elif 'transformer.wte' in name or 'lm_head' in name:
+                    copied_params.append(param)
+                else:
+                    new_params.append(param)  # All other parameters (e.g., embeddings, output layer) treated as new
+
+            # Create parameter groups with different learning rates
+            param_groups = [
+                {'params': copied_params, 'lr': learning_rate * 0.1},
+                {'params': new_params, 'lr': learning_rate}
+            ]
+
+            optimizer = torch.optim.AdamW(param_groups, lr=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.95))
+
         return optimizer
     
     # learning rate decay scheduler (linear warmup and final warmdown)
@@ -366,8 +393,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (12, 12, 768, 100000, 40, 0.00018),
-        (24, 9, 576, 100000, 30, 0.0001)
+        (12, 12, 768, 1000, 40, 0.00018),
+        (24, 9, 576, 1000, 30, 0.0001)
     ]
 
     # Calculate total iterations in the progressive schedule
@@ -380,7 +407,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     warmdown_iters = int(0.2 * current_iters)
     stage_start_iter = 0
     model = initialize_model(current_depth, n_head=current_head, n_embd=current_embd)
-    optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
+    optimizer = reinitialize_optimizer(model, current_lr, weight_decay, is_first_init=True)
 
     print_model_details(model)
 
@@ -424,7 +451,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Initialize the new model with weights from the previous model
                 model = initialize_model(current_depth, prev_model=prev_model, n_head=current_head, n_embd=current_embd)
-                optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
+                optimizer = reinitialize_optimizer(model, current_lr, weight_decay, is_first_init=False)
                 
                 # Set the batch size for the new stage
                 train_loader.set_batch_size(new_batch_size)
