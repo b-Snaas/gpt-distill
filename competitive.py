@@ -240,11 +240,11 @@ class DataLoader:
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path= None, 
-            batch_size=25, 
-            sequence_length=512, 
+            batch_size=40, 
+            sequence_length=1024, 
             num_iterations=200000, 
-            learning_rate=0.0002, 
-            warmup_iters=500,
+            learning_rate=0.00018, 
+            warmup_iters=250,
             warmdown_iters=20000,
             weight_decay=0.1,
             val_loss_every=1280, 
@@ -279,7 +279,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
     num_vocab = 50257
-    model_config = GPTConfig(vocab_size=50257, n_layer=48, n_head=16, n_embd=1024)
+    model_config = GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=768)
 
     model = GPT(model_config)
     model = model.train().cuda()
@@ -300,29 +300,20 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                                                learning_rate=learning_rate, betas=(0.9, 0.95),
                                                device_type=device)
 
+    # learning rate decay scheduler (linear warmup and warmdown)
     def get_lr(it):
         assert it <= num_iterations
-        first_warmdown_start = 80000
-        first_warmdown_end = 100000
-        second_warmdown_start = 180000
-
         # 1) linear warmup for warmup_iters steps
         if it < warmup_iters:
-            return learning_rate * (it + 1) / warmup_iters
-        # 2) constant lr until first warmdown
-        elif it < first_warmdown_start:
+            return learning_rate * (it+1) / warmup_iters
+        # 2) constant lr for a while
+        elif it < num_iterations - warmdown_iters:
             return learning_rate
-        # 3) first linear warmdown
-        elif it < first_warmdown_end:
-            decay_ratio = (first_warmdown_end - it) / (first_warmdown_end - first_warmdown_start)
-            return learning_rate * decay_ratio
-        # 4) reduced constant lr (0.5 * learning_rate) until second warmdown
-        elif it < second_warmdown_start:
-            return 0.5 * learning_rate
-        # 5) final linear warmdown
+        # 3) linear warmdown
         else:
             decay_ratio = (num_iterations - it) / warmdown_iters
-            return 0.5 * learning_rate * decay_ratio
+            return learning_rate * decay_ratio
+        
         
     timings = []
     instances_seen = 0  # Initialize counter for instances seen
@@ -367,6 +358,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             p.grad = p.grad / (p.grad.norm() + 1e-6)
         # determine and set the learning rate for this iteration
         lr = get_lr(step)
+        if step > 100000:
+            lr = lr * 0.5
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
