@@ -346,7 +346,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
-            copied_layers.append(model.transformer.wte)
         else:
             # If there's no previous model, all layers are new
             new_layers = list(model.transformer.h) + [model.transformer.wte]
@@ -393,7 +392,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (6, 12, 768, 50000, 45, 0.00025),
+        (9, 12, 768, 30000, 43, 0.00020),
         (12, 12, 768, 150000, 40, 0.00015)
     ]
 
@@ -512,7 +511,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         lr = get_lr(step, stage_start_iter, new_iters, warmdown_iters, current_lr)
         for i, param_group in enumerate(optimizer.param_groups):
-            param_group['lr'] = lr
+            if i == 0:
+                param_group['lr'] = lr * 0.5
+            else:
+                param_group['lr'] = lr
 
         # step the optimizer
         optimizer.step()
