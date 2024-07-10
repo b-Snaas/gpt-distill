@@ -366,7 +366,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             new_params.extend(layer.parameters())
         
         param_groups = [
-            {'params': copied_params, 'lr': learning_rate * 0.1},  # Scaled down learning rate for copied layers
+            {'params': copied_params, 'lr': learning_rate * 0.5},  # Scaled down learning rate for copied layers
             {'params': new_params, 'lr': learning_rate}  # Normal learning rate for new layers
         ]
         
@@ -394,7 +394,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # progressive training schedule
     progressive_schedule = [
         (12, 12, 768, 100000, 40, 0.00018),
-        (24, 9, 576, 100000, 30, 0.00009)
+        (24, 9, 576, 100000, 30, 0.00005)
     ]
 
     # Calculate total iterations in the progressive schedule
@@ -513,7 +513,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         lr = get_lr(step, stage_start_iter, new_iters, warmdown_iters, current_lr)
         for i, param_group in enumerate(optimizer.param_groups):
             if i == 0:  # Copied layers group
-                param_group['lr'] = lr * 0.1  # Apply scaling here
+                param_group['lr'] = lr * 0.5  # Apply scaling here
             else:  # New layers group
                 param_group['lr'] = lr
 
