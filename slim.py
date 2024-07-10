@@ -512,10 +512,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         lr = get_lr(step, stage_start_iter, new_iters, warmdown_iters, current_lr)
         for i, param_group in enumerate(optimizer.param_groups):
-            if i == 0:  # Copied layers group
-                param_group['lr'] = lr * 0.5  # Apply scaling here
-            else:  # New layers group
-                param_group['lr'] = lr
+            param_group['lr'] = lr
 
         # step the optimizer
         optimizer.step()
