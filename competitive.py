@@ -240,9 +240,9 @@ class DataLoader:
 def train(input_bin="data/fineweb10B/fineweb_train_*.bin", 
             input_val_bin="data/fineweb10B/fineweb_val_*.bin", 
             model_path= None, 
-            batch_size=40, 
+            batch_size=20, 
             sequence_length=1024, 
-            num_iterations=200000, 
+            num_iterations=400000, 
             learning_rate=0.0005, 
             warmup_iters=250,
             warmdown_iters=20000,
@@ -279,7 +279,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
     num_vocab = 50257
-    model_config = GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=768)
+    model_config = GPTConfig(vocab_size=num_vocab, n_layer=24, n_head=16, n_embd=1024)
 
     model = GPT(model_config)
     model = model.train().cuda()
@@ -358,8 +358,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             p.grad = p.grad / (p.grad.norm() + 1e-6)
         # determine and set the learning rate for this iteration
         lr = get_lr(step)
-        if step > 100000:
-            lr = lr * 0.5
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # step the optimizer
