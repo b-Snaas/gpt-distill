@@ -337,27 +337,30 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         new_layers = []
 
         if prev_model:
-            # Always copy the previous model twice
-            for i in range(depth):
-                source_layer_index = i % prev_depth
-                model.transformer.h[i].load_state_dict(prev_model.transformer.h[source_layer_index].state_dict())
+            # First, copy all layers from the previous model
+            for i in range(min(depth, prev_depth)):
+                model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
                 copied_layers.append(model.transformer.h[i])
+            
+            # If there are still layers to fill, prioritize copying from the end of the previous model
+            if depth > prev_depth:
+                remaining_layers = depth - prev_depth
+                for i in range(remaining_layers):
+                    source_layer_index = prev_depth - 1 - (i % prev_depth)
+                    target_layer_index = prev_depth + i
+                    model.transformer.h[target_layer_index].load_state_dict(prev_model.transformer.h[source_layer_index].state_dict())
+                    copied_layers.append(model.transformer.h[target_layer_index])
             
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
+            copied_layers.append(model.transformer.wte)
         else:
             # If there's no previous model, all layers are new
             new_layers = list(model.transformer.h)
-
-        # The embedding layer is always copied if there's a previous model, otherwise it's new
-        if prev_model:
-            copied_layers.append(model.transformer.wte)
-        else:
             new_layers.append(model.transformer.wte)
 
         model = torch.compile(model)
         return model, copied_layers, new_layers
-    
 
     def reinitialize_optimizer(model, copied_layers, new_layers, learning_rate, weight_decay):
         copied_params = []
@@ -377,39 +380,30 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         optimizer = torch.optim.AdamW(param_groups, lr=learning_rate, betas=(0.9, 0.95), weight_decay=weight_decay)
         return optimizer
     
-    # learning rate decay scheduler (linear warmup and final warmdown)
-    def get_lr(it, stage_start_iter, current_iters, warmdown_iters, current_lr):
-        stage_progress = it - stage_start_iter
-        assert stage_progress <= current_iters
+ # learning rate decay scheduler (initial warmup and final warmdown)
+    def get_lr(it, total_iters, warmup_iters, warmdown_iters, current_lr):
         # 1) linear warmup for warmup_iters steps
-        if stage_progress < warmup_iters:
-            # print(f"WARMING UP iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
-            return current_lr * (stage_progress + 1) / warmup_iters
-        # 2) constant lr for most of the stage
-        elif stage_progress < current_iters - warmdown_iters:
-            # print(f"NORMAL iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
+        if it < warmup_iters:
+            return current_lr * it / warmup_iters
+        # 2) constant lr for most of the training
+        elif it < total_iters - warmdown_iters:
             return current_lr
-        # 3) linear warmdown
+        # 3) linear warmdown for last warmdown_iters steps
         else:
-            # print(f"WARMING DOWN iteration:{it} and stage_start: {stage_start_iter} and current_iters: {current_iters}")
-            decay_ratio = (current_iters - stage_progress) / warmdown_iters
-            return current_lr * decay_ratio
+            return current_lr * (total_iters - it) / warmdown_iters
 
-    # progressive training schedule
     progressive_schedule = [
-        (12, 16, 1024, 100000, 33, 0.0002),
-        (24, 16, 1024, 200000, 22, 0.0001)
+        (6, 12, 768, 10000, 45, 0.0004),
+        (9, 12, 768, 40000, 42, 0.00025),
+        (12, 12, 768, 150000, 40, 0.00015)
     ]
 
     # Calculate total iterations in the progressive schedule
-    total_scheduled_iters = sum(iters for _, _, _, iters, _, _ in progressive_schedule)
+    total_iters = sum(iters for _, _, _, iters, _, _ in progressive_schedule)
+    warmdown_iters = int(0.1 * total_iters)  # 10% of total iterations for warmdown
 
     # initialize the first model and optimizer
-    current_iters = 0
-    current_depth, current_head, current_embd, new_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
-    current_iters += new_iters
-    warmdown_iters = 0
-    stage_start_iter = 0
+    current_depth, current_head, current_embd, current_iters, current_batch_size, current_lr = progressive_schedule[0]
     model, copied_layers, new_layers = initialize_model(current_depth, n_head=current_head, n_embd=current_embd)
     optimizer = reinitialize_optimizer(model, copied_layers, new_layers, current_lr, weight_decay)
 
@@ -425,13 +419,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     timings = []
     instances_seen = 0
     step = 0
-    steps_in_current_schedule = 0
     steps_in_prev_schedules = 0
-    local_step = 0
+    steps_in_current_schedule = 0
 
-    num_iterations = total_scheduled_iters
-
-    while step < num_iterations:
+    while step < total_iters:
         if progressive_schedule and (steps_in_current_schedule + steps_in_prev_schedules) == current_iters - 10:
             next_depth, _, _ , _ , next_batch_size, new_lr = progressive_schedule[0]
             if train_loader.B != next_batch_size:
@@ -444,10 +435,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 prev_model = model
                 current_depth, current_head, current_embd, new_iters, new_batch_size, new_lr = progressive_schedule.pop(0)
                 current_iters += new_iters
-                warmdown_iters = int(0.2 * new_iters)
                 steps_in_prev_schedules += steps_in_current_schedule
                 steps_in_current_schedule = 0
-                local_step = 0
 
                 del optimizer
 
@@ -463,8 +452,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Delete the previous model to free memory
                 del prev_model
-
-                stage_start_iter = step
+                
                 current_lr = new_lr  # Update the current learning rate
 
                 clear_memory()
@@ -474,7 +462,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         t0 = time.time()
 
         # once in a while evaluate the validation dataset
-        if (val_loss_every > 0 and (step % val_loss_every == 0 or step == num_iterations)) and (val_loader is not None):
+        if (val_loss_every > 0 and (step % val_loss_every == 0 or step == total_iters)) and (val_loader is not None):
             model.eval()
             val_loader.reset()
             with torch.no_grad():
@@ -491,7 +479,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
             wandb.log({"val_loss": val_loss, "step": step})
 
-        if step == num_iterations:
+        if step == total_iters:
             break
 
         # --------------- TRAINING SECTION BEGIN -----------------
@@ -514,7 +502,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if p.grad is not None:
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
 
-        lr = get_lr(step, stage_start_iter, new_iters, warmdown_iters, current_lr)
+        lr = get_lr(step, total_iters, warmup_iters, warmdown_iters, current_lr)
         for i, param_group in enumerate(optimizer.param_groups):
                 param_group['lr'] = lr
 
@@ -542,7 +530,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         wandb.log(log_dict)
 
         # keep track of smooth timings, last 20 iterations
-        if step > 0 and step > num_iterations - 20:
+        if step > 0 and step > total_iters - 20:
             timings.append(t1-t0)
 
         step += 1
