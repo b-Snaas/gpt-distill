@@ -452,7 +452,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Delete the previous model to free memory
                 del prev_model
-                
+
                 current_lr = new_lr  # Update the current learning rate
 
                 clear_memory()
@@ -535,7 +535,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         step += 1
         steps_in_current_schedule += 1
-        local_step += 1  # Increment local step
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
