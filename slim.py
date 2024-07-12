@@ -408,7 +408,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     warmdown_iters = int(0.1 * total_iters)  # 10% of total iterations for warmdown
 
     # initialize the first model and optimizer
-    current_depth, current_head, current_embd, current_iters, current_batch_size, current_lr = progressive_schedule[0]
+    current_depth, current_head, current_embd, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
     model, copied_layers, new_layers = initialize_model(current_depth, n_head=current_head, n_embd=current_embd)
     optimizer = reinitialize_optimizer(model, copied_layers, new_layers, current_lr, weight_decay)
 
