@@ -393,8 +393,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             return current_lr * (total_iters - it) / warmdown_iters
 
     progressive_schedule = [
-        (6, 12, 768, 10000, 45, 0.0004),
-        (9, 12, 768, 40000, 42, 0.00025),
+        (3, 12, 768, 3000, 50, 0.0004),
+        (6, 12, 768, 7000, 45, 0.0002),
+        (9, 12, 768, 40000, 42, 0.00017),
         (12, 12, 768, 150000, 40, 0.00015)
     ]
 
