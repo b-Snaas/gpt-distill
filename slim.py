@@ -397,8 +397,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # progressive training schedule
     progressive_schedule = [
-        (6, 12, 768, 10000, 45, 0.0004),
-        (12, 12, 768, 190000, 40, 0.00015)
+        (12, 16, 1024, 10000, 45, 0.0002),
+        (24, 16, 1024, 190000, 40, 0.0001)
     ]
 
     # Calculate total iterations in the progressive schedule
