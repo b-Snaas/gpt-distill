@@ -167,7 +167,8 @@ class GPT(nn.Module):
         if self.config.n_embd != self.config.orig_embd:
             x = self.transformer.proj_up(x)  # Final projection up
 
-        intermediate_logits = rmsnorm(intermediate_logits)
+        if self.distillation_mode and self.prev_max_depth:
+            intermediate_logits = rmsnorm(intermediate_logits)
 
         x = rmsnorm(x)
 
