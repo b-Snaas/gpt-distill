@@ -150,7 +150,7 @@ class GPT(nn.Module):
             self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
             self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
 
-    def forward(self, idx, targets=None, return_logits=True, gamma=0.5):
+    def forward(self, idx, targets=None, return_logits=True, gamma=0.2):
         b, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
 
@@ -176,22 +176,22 @@ class GPT(nn.Module):
         loss = None
 
         if targets is not None:
-            initial_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and intermediate_logits is not None:
                 target_output = intermediate_logits.transpose(2, 1)
                 targ = F.softmax(target_output, dim=1)
                 distill_loss = F.cross_entropy(logits.transpose(2, 1), targ, reduction='mean')
-                loss = (1 - gamma) * initial_loss + gamma * distill_loss
+                loss = (1 - gamma) * ground_truth_loss + gamma * distill_loss
             else:
-                loss = initial_loss
+                loss = ground_truth_loss
         else:
             logits = self.lm_head(x[:, [-1], :]) # inference-time mini-optimization
 
         if not return_logits:
             logits = None
 
-        return logits, loss
+        return logits, loss, ground_truth_loss
 
     def set_distillation_mode(self, mode=True):
         self.distillation_mode = mode
@@ -489,11 +489,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    _, loss = model(
+                    _, loss, ground_truth_loss = model(
                         x_val, y_val, 
                         return_logits=False, 
                     )
-                    val_loss += loss.item()
+                    val_loss += ground_truth_loss.item()
                 val_loss /= val_max_steps
 
             # Log the validation loss
@@ -514,7 +514,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model.train()
         
         with ctx:
-            _, loss = model(
+            _, loss, ground_truth_loss = model(
                 x, y, 
                 return_logits=False, 
             )
@@ -555,7 +555,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         # time and print
         t1 = time.time()
-        lossf = loss.item() # keep track of the mean loss
+        lossf = ground_truth_loss.item() # keep track of the mean loss
 
         log_dict = {
             "train_loss": lossf, 
