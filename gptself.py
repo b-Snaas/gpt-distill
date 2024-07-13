@@ -381,11 +381,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
         return optimizer
     
-    # learning rate decay scheduler (initial warmup and final warmdown)
-    def get_lr(it, total_iters, warmup_iters, warmdown_iters, current_lr, stage_start_iter):
-        # 1) linear warmup for warmup_iters steps after each model switch
-        if it < stage_start_iter + warmup_iters:
-            return current_lr * (it - stage_start_iter) / warmup_iters
+ # learning rate decay scheduler (initial warmup and final warmdown)
+    def get_lr(it, total_iters, warmup_iters, warmdown_iters, current_lr):
+        # 1) linear warmup for warmup_iters steps
+        if it < warmup_iters:
+            return current_lr * it / warmup_iters
         # 2) constant lr for most of the training
         elif it < total_iters - warmdown_iters:
             return current_lr
@@ -394,9 +394,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             return current_lr * (total_iters - it) / warmdown_iters
 
     progressive_schedule = [
-        (6, 16, 1024, 500, 42, 0.0004),
-        (12, 16, 1024, 500, 25, 0.00015),
-        (24, 16, 1024, 500, 18, 0.0001)
+        # (3, 12, 768, 2000, 48, 0.0005),
+        (6, 16, 1024, 10000, 42, 0.0004),
+        (12, 16, 1024, 40000, 24, 0.00015),
+        (24, 16, 1024, 150000, 18, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -427,7 +428,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     step = 0
     steps_in_prev_schedules = 0
     steps_in_current_schedule = 0
-    stage_start_iter = 0
 
     # Initialize variables to keep track of the validation loss
     best_prev_val_loss = float('inf')
@@ -450,7 +450,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_iters += new_iters
                 steps_in_prev_schedules += steps_in_current_schedule
                 steps_in_current_schedule = 0
-                stage_start_iter = step  # Update the start iteration for the new stage
 
                 # Calculate and save the best validation loss of the previous model
                 best_prev_val_loss = min(best_prev_val_loss, current_val_loss)
@@ -479,7 +478,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Enable distillation mode for the new model
                 model.set_distillation_mode(True)
                 print("Distillation Mode on")
-                print(f"Starting warmup for {warmup_iters} iterations")
 
         t0 = time.time()
 
@@ -532,13 +530,19 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if p.grad is not None:
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
 
-        lr = get_lr(step, total_iters, warmup_iters, warmdown_iters, current_lr, stage_start_iter)
-        for i, param_group in enumerate(optimizer.param_groups):
+    
+        if 10000 <= step <= 10250:
+            lr = get_lr(step - 10000, total_iters, warmup_iters, warmdown_iters, current_lr)
+            for i, param_group in enumerate(optimizer.param_groups):
                 param_group['lr'] = lr
-
-        step += 1
-        steps_in_current_schedule += 1
-
+        elif 50000 <= step <= 50250:
+            lr = get_lr(step - 50000, total_iters, warmup_iters, warmdown_iters, current_lr)
+            for i, param_group in enumerate(optimizer.param_groups):
+                param_group['lr'] = lr
+        else:
+            lr = get_lr(step, total_iters, warmup_iters, warmdown_iters, current_lr)
+            for i, param_group in enumerate(optimizer.param_groups):
+                    param_group['lr'] = lr
 
         # step the optimizer
         optimizer.step()
