@@ -460,7 +460,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Initialize the new model with weights from the previous model
                 model, copied_layers, new_layers = initialize_model(current_depth, prev_model=prev_model, n_head=current_head, n_embd=current_embd)
-                optimizer = reinitialize_optimizer(model, copied_layers, new_layers, new_lr, weight_decay)
+                optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
                 
                 # Set the batch size for the new stage
                 train_loader.set_batch_size(new_batch_size)
