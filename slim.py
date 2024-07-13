@@ -337,19 +337,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         new_layers = []
 
         if prev_model:
-            # First, copy all layers from the previous model
-            for i in range(min(depth, prev_depth)):
-                model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
+            # Copy layers from the previous model, starting over if we exceed prev_depth
+            for i in range(depth):
+                source_layer_index = i % prev_depth
+                model.transformer.h[i].load_state_dict(prev_model.transformer.h[source_layer_index].state_dict())
                 copied_layers.append(model.transformer.h[i])
-            
-            # If there are still layers to fill, prioritize copying from the end of the previous model
-            if depth > prev_depth:
-                remaining_layers = depth - prev_depth
-                for i in range(remaining_layers):
-                    source_layer_index = prev_depth - 1 - (i % prev_depth)
-                    target_layer_index = prev_depth + i
-                    model.transformer.h[target_layer_index].load_state_dict(prev_model.transformer.h[source_layer_index].state_dict())
-                    copied_layers.append(model.transformer.h[target_layer_index])
             
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
