@@ -126,6 +126,8 @@ class GPT(nn.Module):
     def __init__(self, config, prev_config=None):
         super().__init__()
         self.config = config
+        self.distillation_mode = False
+        self.prev_max_depth = prev_config.n_layer if prev_config else None
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.orig_embd),
@@ -148,8 +150,7 @@ class GPT(nn.Module):
             self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
             self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
 
-
-    def forward(self, idx, targets=None, return_logits=True):
+    def forward(self, idx, targets=None, return_logits=True, gamma=0.5):
         b, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
 
@@ -160,26 +161,39 @@ class GPT(nn.Module):
             x = block(x)
             if i == 11 and self.config.n_embd != self.config.orig_embd:
                 x = self.transformer.proj_down(x)  # Project back up after 12th layer
+            if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
+                intermediate_logits = self.lm_head(x).detach()
 
         if self.config.n_embd != self.config.orig_embd:
             x = self.transformer.proj_up(x)  # Final projection up
 
+        intermediate_logits = rmsnorm(intermediate_logits)
+
         x = rmsnorm(x)
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
+        logits = self.lm_head(x)
+        loss = None
 
-        # there are performance reasons why not returning logits is prudent, if not needed
+        if targets is not None:
+            initial_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+
+            if self.distillation_mode and self.intermediate_logits is not None:
+                target_output = self.intermediate_logits.transpose(2, 1)
+                targ = F.softmax(target_output, dim=1)
+                distill_loss = F.cross_entropy(logits.transpose(2, 1), targ, reduction='mean')
+                loss = (1 - gamma) * initial_loss + gamma * distill_loss
+            else:
+                loss = initial_loss
+        else:
+            logits = self.lm_head(x[:, [-1], :]) # inference-time mini-optimization
+
         if not return_logits:
             logits = None
 
         return logits, loss
+
+    def set_distillation_mode(self, mode=True):
+        self.distillation_mode = mode
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
@@ -342,14 +356,18 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
                 copied_layers.append(model.transformer.h[i])
             
-            # If there are still layers to fill, prioritize copying from the end of the previous model
+            # If there are still layers to fill, prioritize copying in the original sequence
             if depth > prev_depth:
                 remaining_layers = depth - prev_depth
                 for i in range(remaining_layers):
-                    source_layer_index = prev_depth - 1 - (i % prev_depth)
+                    source_layer_index = i % prev_depth
                     target_layer_index = prev_depth + i
-                    model.transformer.h[target_layer_index].load_state_dict(prev_model.transformer.h[source_layer_index].state_dict())
-                    copied_layers.append(model.transformer.h[target_layer_index])
+                    # Copy only attention weights and rotary embeddings
+                    model.transformer.h[target_layer_index].attn.load_state_dict(prev_model.transformer.h[source_layer_index].attn.state_dict())
+                    model.transformer.h[target_layer_index].attn.rotary.load_state_dict(prev_model.transformer.h[source_layer_index].attn.rotary.state_dict())
+                    copied_layers.append(model.transformer.h[target_layer_index].attn)
+                    copied_layers.append(model.transformer.h[target_layer_index].attn.rotary)
+                    new_layers.append(model.transformer.h[target_layer_index])
             
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
@@ -361,6 +379,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         model = torch.compile(model)
         return model, copied_layers, new_layers
+
 
     def reinitialize_optimizer(model, copied_layers, new_layers, learning_rate, weight_decay):
         copied_params = []
@@ -428,14 +447,20 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     steps_in_prev_schedules = 0
     steps_in_current_schedule = 0
 
+    # Initialize variables to keep track of the validation loss
+    best_prev_val_loss = float('inf')
+    current_val_loss = float('inf')
+
+    # Training loop
     while step < total_iters:
         if progressive_schedule and (steps_in_current_schedule + steps_in_prev_schedules) == current_iters - 10:
-            next_depth, _, _ , _ , next_batch_size, new_lr = progressive_schedule[0]
+            next_depth, _, _, _, next_batch_size, new_lr = progressive_schedule[0]
             if train_loader.B != next_batch_size:
                 print(f"Switching to next batch size {next_batch_size} at step {step}")
                 train_loader.set_batch_size(next_batch_size)
                 val_loader.set_batch_size(next_batch_size)
                 current_lr = new_lr
+        
         if step >= current_iters:
             if progressive_schedule:
                 prev_model = model
@@ -443,6 +468,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 current_iters += new_iters
                 steps_in_prev_schedules += steps_in_current_schedule
                 steps_in_current_schedule = 0
+
+                # Calculate and save the best validation loss of the previous model
+                best_prev_val_loss = min(best_prev_val_loss, current_val_loss)
 
                 del optimizer
 
@@ -465,6 +493,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 print_model_details(model)
 
+                # Enable distillation mode for the new model
+                model.set_distillation_mode(True)
+
         t0 = time.time()
 
         # once in a while evaluate the validation dataset
@@ -473,7 +504,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             val_loader.reset()
             with torch.no_grad():
                 val_loss = 0.0
-                val_ground = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
                     _, loss = model(
@@ -483,7 +513,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                     val_loss += loss.item()
                 val_loss /= val_max_steps
 
+            # Log the validation loss
             wandb.log({"val_loss": val_loss, "step": step})
+
+            # Update the current validation loss
+            current_val_loss = val_loss
+
+            # Disable distillation mode if the validation loss is better than the best previous validation loss
+            if model.distillation_mode and current_val_loss < best_prev_val_loss:
+                model.set_distillation_mode(False)
 
         if step == total_iters:
             break
