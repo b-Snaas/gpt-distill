@@ -366,38 +366,19 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                     # Copy only attention weights and rotary embeddings
                     model.transformer.h[target_layer_index].attn.load_state_dict(prev_model.transformer.h[source_layer_index].attn.state_dict())
                     model.transformer.h[target_layer_index].attn.rotary.load_state_dict(prev_model.transformer.h[source_layer_index].attn.rotary.state_dict())
-                    copied_layers.append(model.transformer.h[target_layer_index].attn)
-                    copied_layers.append(model.transformer.h[target_layer_index].attn.rotary)
-                    new_layers.append(model.transformer.h[target_layer_index])
             
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
-            copied_layers.append(model.transformer.wte)
         else:
             # If there's no previous model, all layers are new
             new_layers = list(model.transformer.h)
-            new_layers.append(model.transformer.wte)
 
         model = torch.compile(model)
         return model, copied_layers, new_layers
 
 
-    def reinitialize_optimizer(model, copied_layers, new_layers, learning_rate, weight_decay):
-        copied_params = []
-        new_params = []
-        
-        for layer in copied_layers:
-            copied_params.extend(layer.parameters())
-        
-        for layer in new_layers:
-            new_params.extend(layer.parameters())
-        
-        param_groups = [
-            {'params': copied_params, 'lr': learning_rate},  # Scaled down learning rate for copied layers
-            {'params': new_params, 'lr': learning_rate}  # Normal learning rate for new layers
-        ]
-        
-        optimizer = torch.optim.AdamW(param_groups, lr=learning_rate, betas=(0.9, 0.95), weight_decay=weight_decay)
+    def reinitialize_optimizer(model, learning_rate, weight_decay):
+        optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
         return optimizer
     
  # learning rate decay scheduler (initial warmup and final warmdown)
@@ -414,9 +395,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
-        (6, 16, 1024, 10000, 42, 0.0004),
-        (12, 16, 1024, 40000, 18, 0.00015),
-        (24, 16, 1024, 150000, 10, 0.0001)
+        (6, 16, 1024, 100, 42, 0.0004),
+        (12, 16, 1024, 100, 18, 0.00015),
+        (24, 16, 1024, 100, 10, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -431,7 +412,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     # initialize the first model and optimizer
     current_depth, current_head, current_embd, current_iters, current_batch_size, current_lr = progressive_schedule.pop(0)
     model, copied_layers, new_layers = initialize_model(current_depth, n_head=current_head, n_embd=current_embd)
-    optimizer = reinitialize_optimizer(model, copied_layers, new_layers, current_lr, weight_decay)
+    optimizer = reinitialize_optimizer(model, current_lr, weight_decay)
 
     print_model_details(model)
 
