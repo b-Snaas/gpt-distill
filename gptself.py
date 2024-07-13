@@ -395,9 +395,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
-        (6, 16, 1024, 100, 42, 0.0004),
-        (12, 16, 1024, 100, 18, 0.00015),
-        (24, 16, 1024, 100, 10, 0.0001)
+        (6, 16, 1024, 500, 42, 0.0004),
+        (12, 16, 1024, 500, 20, 0.00015),
+        (24, 16, 1024, 500, 12, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -477,6 +477,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Enable distillation mode for the new model
                 model.set_distillation_mode(True)
+                print("Distillation Mode on")
 
         t0 = time.time()
 
@@ -504,6 +505,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             # Disable distillation mode if the validation loss is better than the best previous validation loss
             if model.distillation_mode and current_val_loss < best_prev_val_loss:
                 model.set_distillation_mode(False)
+                print("Distillation Mode off")
 
         if step == total_iters:
             break
