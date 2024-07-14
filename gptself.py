@@ -174,15 +174,16 @@ class GPT(nn.Module):
 
         logits = self.lm_head(x)
         loss = None
+        distill_loss = None
 
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and intermediate_logits is not None:
-                target_output = intermediate_logits.transpose(2, 1)
+                target_output = ground_truth_loss.transpose(2, 1)
                 targ = F.softmax(target_output, dim=1)
-                distill_loss = F.cross_entropy(logits.transpose(2, 1), targ, reduction='mean')
-                loss = (1 - gamma) * ground_truth_loss + gamma * distill_loss
+                distill_loss = F.cross_entropy(intermediate_logits.transpose(2, 1), targ, reduction='mean')
+                loss = ground_truth_loss + gamma * distill_loss
             else:
                 loss = ground_truth_loss
         else:
@@ -191,7 +192,7 @@ class GPT(nn.Module):
         if not return_logits:
             logits = None
 
-        return logits, loss, ground_truth_loss
+        return logits, loss, ground_truth_loss, distill_loss
 
     def set_distillation_mode(self, mode=True):
         self.distillation_mode = mode
@@ -352,26 +353,19 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         new_layers = []
 
         if prev_model:
-            # First, copy all layers from the previous model
-            for i in range(min(depth, prev_depth)):
-                model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
+            # Copy layers from the previous model, starting over if we exceed prev_depth
+            for i in range(depth):
+                source_layer_index = i % prev_depth
+                model.transformer.h[i].load_state_dict(prev_model.transformer.h[source_layer_index].state_dict())
                 copied_layers.append(model.transformer.h[i])
-            
-            # If there are still layers to fill, prioritize copying in the original sequence
-            if depth > prev_depth:
-                remaining_layers = depth - prev_depth
-                for i in range(remaining_layers):
-                    source_layer_index = i % prev_depth
-                    target_layer_index = prev_depth + i
-                    # Copy only attention weights and rotary embeddings
-                    model.transformer.h[target_layer_index].attn.load_state_dict(prev_model.transformer.h[source_layer_index].attn.state_dict())
-                    model.transformer.h[target_layer_index].attn.rotary.load_state_dict(prev_model.transformer.h[source_layer_index].attn.rotary.state_dict())
             
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
+            copied_layers.append(model.transformer.wte)
         else:
             # If there's no previous model, all layers are new
             new_layers = list(model.transformer.h)
+            new_layers.append(model.transformer.wte)
 
         model = torch.compile(model)
         return model, copied_layers, new_layers
@@ -397,7 +391,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # (3, 12, 768, 2000, 48, 0.0005),
         (6, 16, 1024, 10000, 42, 0.0004),
         (12, 16, 1024, 40000, 24, 0.00015),
-        (24, 16, 1024, 150000, 18, 0.0001)
+        (24, 16, 1024, 150000, 16, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -489,7 +483,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 val_loss = 0.0
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
-                    _, loss, ground_truth_loss = model(
+                    _, loss, ground_truth_loss, distill_loss = model(
                         x_val, y_val, 
                         return_logits=False, 
                     )
@@ -502,10 +496,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             # Update the current validation loss
             current_val_loss = val_loss
 
-            # Disable distillation mode if the validation loss is better than the best previous validation loss
-            if model.distillation_mode and current_val_loss < best_prev_val_loss:
-                model.set_distillation_mode(False)
-                print("Distillation Mode off")
+            # # Disable distillation mode if the validation loss is better than the best previous validation loss
+            # if model.distillation_mode and current_val_loss < best_prev_val_loss:
+            #     model.set_distillation_mode(False)
+            #     print("Distillation Mode off")
 
         if step == total_iters:
             break
@@ -514,7 +508,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model.train()
         
         with ctx:
-            _, loss, ground_truth_loss = model(
+            _, loss, ground_truth_loss, distill_loss = model(
                 x, y, 
                 return_logits=False, 
             )
@@ -556,9 +550,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         # time and print
         t1 = time.time()
         lossf = ground_truth_loss.item() # keep track of the mean loss
+        dissloss = distill_loss.item() if distill_loss is not None else 0.0
 
         log_dict = {
-            "train_loss": lossf, 
+            "train_loss": lossf,
+            "distill_loss": dissloss,
             "step": step, 
             "instances_seen": instances_seen,
             "lr": lr,
