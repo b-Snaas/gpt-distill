@@ -180,7 +180,7 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and intermediate_logits is not None:
-                target_output = ground_truth_loss.transpose(2, 1)
+                target_output = logits.transpose(2, 1)
                 targ = F.softmax(target_output, dim=1)
                 distill_loss = F.cross_entropy(intermediate_logits.transpose(2, 1), targ, reduction='mean')
                 loss = ground_truth_loss + gamma * distill_loss
