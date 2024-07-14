@@ -242,7 +242,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             model_path= None, 
             batch_size=24, 
             sequence_length=1024, 
-            num_iterations=200000, 
+            num_iterations=100, 
             learning_rate=0.0001, 
             warmup_iters=250,
             warmdown_iters=20000,
@@ -378,6 +378,21 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # print the average of the last 20 timings, to get something smooth-ish
     timings = timings[-20:]
+
+    # Save the model at the end of training
+    if model_path:
+        save_dir = os.path.dirname(model_path)
+        os.makedirs(save_dir, exist_ok=True)
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'step': step,
+            'config': model.config,
+        }, model_path)
+        print(f"Model saved to {model_path}")
+    else:
+        print("Model not saved. Specify a model_path to save the model.")
+
 
 if __name__ == "__main__":
     fire.Fire(train)

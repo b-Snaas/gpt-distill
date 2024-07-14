@@ -575,5 +575,21 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     print(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")
     print(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
 
+    # Save the model at the end of training
+    if model_path:
+        save_dir = os.path.dirname(model_path)
+        os.makedirs(save_dir, exist_ok=True)
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'step': step,
+            'total_iters': total_iters,
+            'config': model.config,
+        }, model_path)
+        print(f"Model saved to {model_path}")
+    else:
+        print("Model not saved. Specify a model_path to save the model.")
+
+
 if __name__ == "__main__":
     fire.Fire(train)
