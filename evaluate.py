@@ -269,10 +269,11 @@ def _load_data_shard(filename):
     return tokens
 
 
-def evaluate_half_model(model_path, input_val_bin="data/fineweb10B/fineweb_val_*.bin", sequence_length=1024, batch_size=42, val_max_steps=20):
+def evaluate_partial_model(model_path, depth=None, input_val_bin="data/fineweb10B/fineweb_val_*.bin", sequence_length=1024, batch_size=42, val_max_steps=20):
     # Initialize wandb
     wandb.init(project="gpt2_distill_evaluation", config={
         "model_path": model_path,
+        "depth": depth,
         "input_val_bin": input_val_bin,
         "sequence_length": sequence_length,
         "batch_size": batch_size,
@@ -283,37 +284,37 @@ def evaluate_half_model(model_path, input_val_bin="data/fineweb10B/fineweb_val_*
     checkpoint = torch.load(model_path)
     config = checkpoint['config']
     
-    # Create a new config with half the layers
-    half_depth = config.n_layer // 2
-    half_config = GPTConfig(
+    # Use the specified depth or the full depth if not specified
+    new_depth = depth if depth is not None else config.n_layer
+    new_config = GPTConfig(
         vocab_size=config.vocab_size,
-        n_layer=half_depth,
+        n_layer=new_depth,
         n_head=config.n_head,
         n_embd=config.n_embd,
         orig_embd=config.orig_embd
     )
     
-    # Initialize the half-model
-    half_model = GPT(half_config)
+    # Initialize the partial model
+    partial_model = GPT(new_config)
     
-    # Load the first half of the layers from the full model
+    # Load the specified number of layers from the full model
     full_state_dict = checkpoint['model_state_dict']
-    half_state_dict = {}
+    partial_state_dict = {}
     for key, value in full_state_dict.items():
         if key.startswith('transformer.h.'):
             layer_num = int(key.split('.')[2])
-            if layer_num < half_depth:
+            if layer_num < new_depth:
                 new_key = key.replace(f'transformer.h.{layer_num}', f'transformer.h.{layer_num}')
-                half_state_dict[new_key] = value
+                partial_state_dict[new_key] = value
         else:
-            half_state_dict[key] = value
+            partial_state_dict[key] = value
     
-    half_model.load_state_dict(half_state_dict, strict=False)
+    partial_model.load_state_dict(partial_state_dict, strict=False)
     
     # Move model to GPU if available
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    half_model = half_model.to(device)
-    half_model.eval()
+    partial_model = partial_model.to(device)
+    partial_model.eval()
     
     # Set up validation data loader
     val_loader = DataLoader(input_val_bin, batch_size, sequence_length)
@@ -324,21 +325,22 @@ def evaluate_half_model(model_path, input_val_bin="data/fineweb10B/fineweb_val_*
         for _ in range(val_max_steps):
             x_val, y_val = val_loader.next_batch()
             x_val, y_val = x_val.to(device), y_val.to(device)
-            _, loss, _, _ = half_model(x_val, y_val, return_logits=False)
+            _, loss, _, _ = partial_model(x_val, y_val, return_logits=False)
             total_loss += loss.item()
     
     avg_loss = total_loss / val_max_steps
     perplexity = torch.exp(torch.tensor(avg_loss))
     
+    print(f"Model Depth: {new_depth}")
     print(f"Validation Loss: {avg_loss:.4f}")
     print(f"Perplexity: {perplexity:.4f}")
     
     # Log results to wandb
     wandb.log({
+        "model_depth": new_depth,
         "val_loss": avg_loss,
-        "perplexity": perplexity,
-        "model_depth": half_depth
+        "perplexity": perplexity
     })
 
 if __name__ == "__main__":
-    fire.Fire(evaluate_half_model)
+    fire.Fire(evaluate_partial_model)
