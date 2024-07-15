@@ -117,10 +117,10 @@ class Block(nn.Module):
 @dataclass
 class GPTConfig:
     vocab_size: int = 50257
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    orig_embd: int = 768
+    n_layer: int = 24
+    n_head: int = 16
+    n_embd: int = 1024
+    orig_embd: int =1024
 
 class GPT(nn.Module):
     def __init__(self, config, prev_config=None):
@@ -146,10 +146,6 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.orig_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight
 
-        if config.n_embd != config.orig_embd:
-            self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
-            self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
-
     def forward(self, idx, targets=None, return_logits=True, gamma=0.2):
         b, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
@@ -159,13 +155,10 @@ class GPT(nn.Module):
 
         for i, block in enumerate(self.transformer.h):
             x = block(x)
-            if i == 11 and self.config.n_embd != self.config.orig_embd:
-                x = self.transformer.proj_down(x)  # Project back up after 12th layer
             if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
                 intermediate_logits = self.lm_head(x).detach()
 
-        if self.config.n_embd != self.config.orig_embd:
-            x = self.transformer.proj_up(x)  # Final projection up
+
 
         if self.distillation_mode and self.prev_max_depth:
             intermediate_logits = rmsnorm(intermediate_logits)
