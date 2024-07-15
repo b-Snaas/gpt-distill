@@ -1,58 +1,104 @@
-import torch
-import numpy as np
-import glob
 import os
+import sys
+import uuid
+import math
+import glob
+from dataclasses import dataclass
+import time
+import gc
+import wandb
+import fire
+import numpy as np
+import torch
 from torch import nn
 import torch.nn.functional as F
-from dataclasses import dataclass
-import wandb
-import math
+import torch._inductor.config as config
 
-@dataclass
-class GPTConfig:
-    block_size: int = 1024
-    vocab_size: int = 50257
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
+with open(sys.argv[0]) as f:
+    code = f.read()
 
-class GPT(nn.Module):
+# -----------------------------------------------------------------------------
+# PyTorch nn.Module definitions for the GPT-2 model
+
+class Rotary(torch.nn.Module):
+    def __init__(self, dim, base=10000):
+        super().__init__()
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+        self.seq_len_cached = None
+        self.cos_cached = None
+        self.sin_cached = None
+
+    def forward(self, x):
+        seq_len = x.shape[1]
+        if seq_len != self.seq_len_cached:
+            self.seq_len_cached = seq_len
+            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
+            freqs = torch.outer(t, self.inv_freq).to(x.device)
+            self.cos_cached = freqs.cos()
+            self.sin_cached = freqs.sin()
+        return self.cos_cached[None, :, None, :], self.sin_cached[None, :, None, :]
+
+def apply_rotary_emb(x, cos, sin):
+    assert x.ndim == 4 # multihead attention
+    d = x.shape[3]//2
+    x1 = x[..., :d]
+    x2 = x[..., d:]
+    y1 = x1 * cos + x2 * sin
+    y2 = x1 * (-sin) + x2 * cos
+    return torch.cat([y1, y2], 3)
+
+def rmsnorm(x0, eps=1e-6):
+    x = x0.float()
+    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+    return x.type_as(x0)
+
+class CausalSelfAttention(nn.Module):
+
     def __init__(self, config):
         super().__init__()
-        self.config = config
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-        ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.lm_head.LLMC_SKIP_INIT = 1
-        self.transformer.wte.weight = self.lm_head.weight
-        self.apply(self._init_weights)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.head_dim = self.n_embd // self.n_head
+        assert self.n_embd % self.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=False)
+        # output projection
+        self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.rotary = Rotary(self.head_dim)
 
-    def _init_weights(self, module):
-        if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    def forward(self, x):
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, self.head_dim)
+        q = q.view(B, T, self.n_head, self.head_dim)
+        v = v.view(B, T, self.n_head, self.head_dim)
+        cos, sin = self.rotary(q)
+        q = apply_rotary_emb(q, cos, sin)
+        k = apply_rotary_emb(k, cos, sin)
+        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=True)
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        # output projection
+        y = self.c_proj(y)
+        return y
 
-    def forward(self, idx, targets=None, return_logits=True):
-        b, t = idx.size()
-        assert t <= self.config.block_size
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
-        tok_emb = self.transformer.wte(idx)
-        pos_emb = self.transformer.wpe(pos)
-        x = tok_emb + pos_emb
-        for block in self.transformer.h:
-            x = block(x)
-        x = rmsnorm(x)
-        logits = self.lm_head(x)
-        loss = None
-        if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        if not return_logits:
-            logits = None
-        return logits, loss
+class MLP(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
+        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
+
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = F.gelu(x)
+        x = self.c_proj(x)
+        return x
 
 class Block(nn.Module):
+
     def __init__(self, config):
         super().__init__()
         self.attn = CausalSelfAttention(config)
@@ -64,44 +110,91 @@ class Block(nn.Module):
         x = x + self.mlp(rmsnorm(x))
         return x
 
-def rmsnorm(x0, eps=1e-6):
-    x = x0.float()
-    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
-    return x.type_as(x0)
+# -----------------------------------------------------------------------------
+# The main GPT-2 model
 
-class CausalSelfAttention(nn.Module):
-    def __init__(self, config):
+
+@dataclass
+class GPTConfig:
+    vocab_size: int = 50257
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    orig_embd: int = 768
+
+class GPT(nn.Module):
+    def __init__(self, config, prev_config=None):
         super().__init__()
-        assert config.n_embd % config.n_head == 0
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=False)
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
+        self.config = config
+        self.distillation_mode = False
+        self.prev_max_depth = prev_config.n_layer if prev_config else None
 
-    def forward(self, x):
-        B, T, C = x.size()
-        qkv = self.c_attn(x)
-        q, k, v = qkv.split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
-        y = self.c_proj(y)
-        return y
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.orig_embd),
+            h = nn.ModuleList()
+        ))
 
-class MLP(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
-        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
+        # Initialize layers
+        for i in range(config.n_layer):
+            if prev_config and i < prev_config.n_layer:
+                # Use previous configuration for copied layers
+                self.transformer.h.append(Block(prev_config))
+            else:
+                # Use new configuration for new layers
+                self.transformer.h.append(Block(config))
 
-    def forward(self, x):
-        x = self.c_fc(x)
-        x = F.gelu(x)
-        x = self.c_proj(x)
-        return x
+        self.lm_head = nn.Linear(config.orig_embd, config.vocab_size, bias=False)
+        self.transformer.wte.weight = self.lm_head.weight
 
+        if config.n_embd != config.orig_embd:
+            self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
+            self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
+
+    def forward(self, idx, targets=None, return_logits=True, gamma=0.2):
+        b, t = idx.size()
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
+
+        # forward the GPT model itself
+        x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+
+        for i, block in enumerate(self.transformer.h):
+            x = block(x)
+            if i == 11 and self.config.n_embd != self.config.orig_embd:
+                x = self.transformer.proj_down(x)  # Project back up after 12th layer
+            if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
+                intermediate_logits = self.lm_head(x).detach()
+
+        if self.config.n_embd != self.config.orig_embd:
+            x = self.transformer.proj_up(x)  # Final projection up
+
+        if self.distillation_mode and self.prev_max_depth:
+            intermediate_logits = rmsnorm(intermediate_logits)
+
+        x = rmsnorm(x)
+
+        logits = self.lm_head(x)
+        loss = None
+        distill_loss = None
+
+        if targets is not None:
+            ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+
+            if self.distillation_mode and intermediate_logits is not None:
+                target_output = logits.transpose(2, 1)
+                targ = F.softmax(target_output, dim=1)
+                distill_loss = F.cross_entropy(intermediate_logits.transpose(2, 1), targ, reduction='mean')
+                loss = ground_truth_loss + gamma * distill_loss
+            else:
+                loss = ground_truth_loss
+        else:
+            logits = self.lm_head(x[:, [-1], :]) # inference-time mini-optimization
+
+        if not return_logits:
+            logits = None
+
+        return logits, loss, ground_truth_loss, distill_loss
+    
+    
 def _peek_data_shard(filename):
     with open(filename, "rb") as f:
         header = np.frombuffer(f.read(256*4), dtype=np.int32)
