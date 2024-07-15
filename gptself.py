@@ -150,7 +150,7 @@ class GPT(nn.Module):
             self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
             self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
 
-    def forward(self, idx, targets=None, return_logits=True, gamma=0.2):
+    def forward(self, idx, targets=None, return_logits=True, gamma=1.0):
         b, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
 
