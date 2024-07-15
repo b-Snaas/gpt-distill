@@ -276,7 +276,7 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=10, sequ
         val_loss = 0.0
         for _ in range(val_max_steps):
             x_val, y_val = val_loader.next_batch()
-            _, loss = model(x_val, y_val, return_logits=False)
+            _, loss, _, _ = model(x_val, y_val, return_logits=False)
             val_loss += loss.item()
         val_loss /= val_max_steps
 
