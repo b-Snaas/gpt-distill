@@ -150,7 +150,7 @@ class GPT(nn.Module):
             self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
             self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
 
-    def forward(self, idx, targets=None, return_logits=True, gamma=1.0):
+    def forward(self, idx, targets=None, return_logits=True, gamma=0.2):
         b, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
 
@@ -180,9 +180,9 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and intermediate_logits is not None:
-                target_output = logits.transpose(2, 1)
+                target_output = intermediate_logits.transpose(2, 1)
                 targ = F.softmax(target_output, dim=1)
-                distill_loss = F.cross_entropy(intermediate_logits.transpose(2, 1), targ, reduction='mean')
+                distill_loss = F.cross_entropy(logits.transpose(2, 1), targ, reduction='mean')
                 loss = ground_truth_loss + gamma * distill_loss
             else:
                 loss = ground_truth_loss
@@ -357,7 +357,10 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             for i in range(depth):
                 source_layer_index = i % prev_depth
                 model.transformer.h[i].load_state_dict(prev_model.transformer.h[source_layer_index].state_dict())
-                copied_layers.append(model.transformer.h[i])
+                if i < prev_depth:
+                    copied_layers.append(model.transformer.h[i])
+                else:
+                    new_layers.append(model.transformer.h[i])
             
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
@@ -370,12 +373,21 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model = torch.compile(model)
         return model, copied_layers, new_layers
 
+    def freeze_layers(layers):
+        for layer in layers:
+            for param in layer.parameters():
+                param.requires_grad = False
+
+    def unfreeze_layers(layers):
+        for layer in layers:
+            for param in layer.parameters():
+                param.requires_grad = True
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
         return optimizer
     
- # learning rate decay scheduler (initial warmup and final warmdown)
+    # learning rate decay scheduler (initial warmup and final warmdown)
     def get_lr(it, total_iters, warmup_iters, warmdown_iters, current_lr):
         # 1) linear warmup for warmup_iters steps
         if it < warmup_iters:
@@ -472,6 +484,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Enable distillation mode for the new model
                 model.set_distillation_mode(True)
                 print("Distillation Mode on")
+                freeze_layers(copied_layers)  # Freeze the copied layers
 
         t0 = time.time()
 
@@ -496,10 +509,11 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             # Update the current validation loss
             current_val_loss = val_loss
 
-            # # Disable distillation mode if the validation loss is better than the best previous validation loss
-            # if model.distillation_mode and current_val_loss < best_prev_val_loss:
-            #     model.set_distillation_mode(False)
-            #     print("Distillation Mode off")
+            # Disable distillation mode if the validation loss is better than the best previous validation loss
+            if model.distillation_mode and current_val_loss < best_prev_val_loss:
+                model.set_distillation_mode(False)
+                print("Distillation Mode off")
+                unfreeze_layers(copied_layers)  # Unfreeze the copied layers
 
         if step == total_iters:
             break
@@ -525,18 +539,18 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
 
     
-        if 10000 <= step <= 10250:
-            lr = get_lr(step - 10000, total_iters, warmup_iters, warmdown_iters, current_lr)
-            for i, param_group in enumerate(optimizer.param_groups):
+        # if 10000 <= step <= 10250:
+        #     lr = get_lr(step - 10000, total_iters, warmup_iters, warmdown_iters, current_lr)
+        #     for i, param_group in enumerate(optimizer.param_groups):
+        #         param_group['lr'] = lr
+        # elif 50000 <= step <= 50250:
+        #     lr = get_lr(step - 50000, total_iters, warmup_iters, warmdown_iters, current_lr)
+        #     for i, param_group in enumerate(optimizer.param_groups):
+        #         param_group['lr'] = lr
+        # else:
+        lr = get_lr(step, total_iters, warmup_iters, warmdown_iters, current_lr)
+        for i, param_group in enumerate(optimizer.param_groups):
                 param_group['lr'] = lr
-        elif 50000 <= step <= 50250:
-            lr = get_lr(step - 50000, total_iters, warmup_iters, warmdown_iters, current_lr)
-            for i, param_group in enumerate(optimizer.param_groups):
-                param_group['lr'] = lr
-        else:
-            lr = get_lr(step, total_iters, warmup_iters, warmdown_iters, current_lr)
-            for i, param_group in enumerate(optimizer.param_groups):
-                    param_group['lr'] = lr
 
         # step the optimizer
         optimizer.step()
