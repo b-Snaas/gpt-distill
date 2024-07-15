@@ -146,7 +146,7 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.orig_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight
 
-    def forward(self, idx, targets=None, return_logits=True, gamma=0.2):
+    def forward(self, idx, targets=None, return_logits=True, gamma=0.2, max_depth=None):
         b, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
 
@@ -154,11 +154,11 @@ class GPT(nn.Module):
         x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
 
         for i, block in enumerate(self.transformer.h):
+            if max_depth is not None and i >= max_depth:
+                break
             x = block(x)
             if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
                 intermediate_logits = self.lm_head(x).detach()
-
-
 
         if self.distillation_mode and self.prev_max_depth:
             intermediate_logits = rmsnorm(intermediate_logits)
@@ -242,7 +242,7 @@ class DataLoader:
             self.advance()
         return x.cuda(), y.cuda()
 
-def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=40, sequence_length=1024, val_max_steps=20):
+def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=40, sequence_length=1024, val_max_steps=20, depth=None):
     # Initialize wandb
     wandb.init(project="gpt2_evaluation", config={
         "pre_trained_model_path": pre_trained_model_path,
@@ -250,6 +250,7 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=40, sequ
         "batch_size": batch_size,
         "sequence_length": sequence_length,
         "val_max_steps": val_max_steps,
+        "depth": depth,
     })
     
     # Load the pre-trained model's state dictionary
@@ -276,14 +277,15 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=40, sequ
         val_loss = 0.0
         for _ in range(val_max_steps):
             x_val, y_val = val_loader.next_batch()
-            _, loss, _, _ = model(x_val, y_val, return_logits=False)
+            _, loss, _, _ = model(x_val, y_val, return_logits=False, max_depth=depth)
             val_loss += loss.item()
         val_loss /= val_max_steps
 
-    print(f"Validation loss: {val_loss}")
-    wandb.log({"validation_loss": val_loss})
+    print(f"Validation loss (depth={depth}): {val_loss}")
+    wandb.log({"validation_loss": val_loss, "depth": depth})
+
 
 if __name__ == "__main__":
     pre_trained_model_path = "/home/bsnaas/git/gpt-distill/model/baseline.pt"
     val_data_pattern = "data/fineweb10B/fineweb_val_*.bin"
-    evaluate_model(pre_trained_model_path, val_data_pattern)
+    evaluate_model(pre_trained_model_path, val_data_pattern, depth=12)
