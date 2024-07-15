@@ -269,7 +269,7 @@ def _load_data_shard(filename):
     return tokens
 
 
-def evaluate_half_model(model_path, input_val_bin, sequence_length=1024, batch_size=42, val_max_steps=20):
+def evaluate_half_model(model_path, input_val_bin="data/fineweb10B/fineweb_val_*.bin", sequence_length=1024, batch_size=42, val_max_steps=20):
     # Initialize wandb
     wandb.init(project="gpt2_distill_evaluation", config={
         "model_path": model_path,
