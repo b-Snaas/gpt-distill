@@ -286,6 +286,6 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=40, sequ
 
 
 if __name__ == "__main__":
-    pre_trained_model_path = "/home/bsnaas/git/gpt-distill/model/baseline.pt"
+    pre_trained_model_path = "/home/bsnaas/git/gpt-distill/model/distill_gpt.pt"
     val_data_pattern = "data/fineweb10B/fineweb_val_*.bin"
     evaluate_model(pre_trained_model_path, val_data_pattern, depth=12)
