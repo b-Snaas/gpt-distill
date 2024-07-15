@@ -1,103 +1,58 @@
-import os
-import sys
-import uuid
-import math
-import glob
-from dataclasses import dataclass
-import time
-import gc
-import wandb
-import fire
-import numpy as np
 import torch
+import numpy as np
+import glob
+import os
 from torch import nn
 import torch.nn.functional as F
+from dataclasses import dataclass
+import wandb
+import math
 
-with open(sys.argv[0]) as f:
-    code = f.read()
+@dataclass
+class GPTConfig:
+    block_size: int = 1024
+    vocab_size: int = 50257
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
 
-# -----------------------------------------------------------------------------
-# PyTorch nn.Module definitions for the GPT-2 model
-
-class Rotary(torch.nn.Module):
-    def __init__(self, dim, base=10000):
-        super().__init__()
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer("inv_freq", inv_freq)
-        self.seq_len_cached = None
-        self.cos_cached = None
-        self.sin_cached = None
-
-    def forward(self, x):
-        seq_len = x.shape[1]
-        if seq_len != self.seq_len_cached:
-            self.seq_len_cached = seq_len
-            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
-            freqs = torch.outer(t, self.inv_freq).to(x.device)
-            self.cos_cached = freqs.cos()
-            self.sin_cached = freqs.sin()
-        return self.cos_cached[None, :, None, :], self.sin_cached[None, :, None, :]
-
-def apply_rotary_emb(x, cos, sin):
-    assert x.ndim == 4 # multihead attention
-    d = x.shape[3]//2
-    x1 = x[..., :d]
-    x2 = x[..., d:]
-    y1 = x1 * cos + x2 * sin
-    y2 = x1 * (-sin) + x2 * cos
-    return torch.cat([y1, y2], 3)
-
-def rmsnorm(x0, eps=1e-6):
-    x = x0.float()
-    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
-    return x.type_as(x0)
-
-class CausalSelfAttention(nn.Module):
-
+class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.head_dim = self.n_embd // self.n_head
-        assert self.n_embd % self.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=False)
-        # output projection
-        self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        self.rotary = Rotary(self.head_dim)
+        self.config = config
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+        ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head.LLMC_SKIP_INIT = 1
+        self.transformer.wte.weight = self.lm_head.weight
+        self.apply(self._init_weights)
 
-    def forward(self, x):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        qkv = self.c_attn(x)
-        q, k, v = qkv.split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, self.head_dim)
-        q = q.view(B, T, self.n_head, self.head_dim)
-        v = v.view(B, T, self.n_head, self.head_dim)
-        cos, sin = self.rotary(q)
-        q = apply_rotary_emb(q, cos, sin)
-        k = apply_rotary_emb(k, cos, sin)
-        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=True)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-        # output projection
-        y = self.c_proj(y)
-        return y
+    def _init_weights(self, module):
+        if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-class MLP(nn.Module):
-
-    def __init__(self, config):
-        super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
-
-    def forward(self, x):
-        x = self.c_fc(x)
-        x = F.gelu(x)
-        x = self.c_proj(x)
-        return x
+    def forward(self, idx, targets=None, return_logits=True):
+        b, t = idx.size()
+        assert t <= self.config.block_size
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
+        tok_emb = self.transformer.wte(idx)
+        pos_emb = self.transformer.wpe(pos)
+        x = tok_emb + pos_emb
+        for block in self.transformer.h:
+            x = block(x)
+        x = rmsnorm(x)
+        logits = self.lm_head(x)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        if not return_logits:
+            logits = None
+        return logits, loss
 
 class Block(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.attn = CausalSelfAttention(config)
@@ -109,238 +64,137 @@ class Block(nn.Module):
         x = x + self.mlp(rmsnorm(x))
         return x
 
-# -----------------------------------------------------------------------------
-# The main GPT-2 model
+def rmsnorm(x0, eps=1e-6):
+    x = x0.float()
+    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+    return x.type_as(x0)
 
-
-@dataclass
-class GPTConfig:
-    vocab_size: int = 50257
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    orig_embd: int = 768
-
-class GPT(nn.Module):
-    def __init__(self, config, prev_config=None):
+class CausalSelfAttention(nn.Module):
+    def __init__(self, config):
         super().__init__()
-        self.config = config
-        self.distillation_mode = False
-        self.prev_max_depth = prev_config.n_layer if prev_config else None
+        assert config.n_embd % config.n_head == 0
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=False)
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
 
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.orig_embd),
-            h = nn.ModuleList()
-        ))
+    def forward(self, x):
+        B, T, C = x.size()
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = self.c_proj(y)
+        return y
 
-        # Initialize layers
-        for i in range(config.n_layer):
-            if prev_config and i < prev_config.n_layer:
-                # Use previous configuration for copied layers
-                self.transformer.h.append(Block(prev_config))
-            else:
-                # Use new configuration for new layers
-                self.transformer.h.append(Block(config))
+class MLP(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
+        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
 
-        self.lm_head = nn.Linear(config.orig_embd, config.vocab_size, bias=False)
-        self.transformer.wte.weight = self.lm_head.weight
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = F.gelu(x)
+        x = self.c_proj(x)
+        return x
 
-        if config.n_embd != config.orig_embd:
-            self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
-            self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
+def _peek_data_shard(filename):
+    with open(filename, "rb") as f:
+        header = np.frombuffer(f.read(256*4), dtype=np.int32)
+    if header[0] != 20240520:
+        raise ValueError("ERROR: magic number mismatch in the data .bin file!")
+    assert header[1] == 1, "unsupported version"
+    ntok = header[2]
+    return ntok
 
-    def forward(self, idx, targets=None, return_logits=True, gamma=0.2):
-        b, t = idx.size()
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
-
-        # forward the GPT model itself
-        x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-
-        for i, block in enumerate(self.transformer.h):
-            x = block(x)
-            if i == 11 and self.config.n_embd != self.config.orig_embd:
-                x = self.transformer.proj_down(x)  # Project back up after 12th layer
-            if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
-                intermediate_logits = self.lm_head(x).detach()
-
-        if self.config.n_embd != self.config.orig_embd:
-            x = self.transformer.proj_up(x)  # Final projection up
-
-        if self.distillation_mode and self.prev_max_depth:
-            intermediate_logits = rmsnorm(intermediate_logits)
-
-        x = rmsnorm(x)
-
-        logits = self.lm_head(x)
-        loss = None
-        distill_loss = None
-
-        if targets is not None:
-            ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-
-            if self.distillation_mode and intermediate_logits is not None:
-                target_output = logits.transpose(2, 1)
-                targ = F.softmax(target_output, dim=1)
-                distill_loss = F.cross_entropy(intermediate_logits.transpose(2, 1), targ, reduction='mean')
-                loss = ground_truth_loss + gamma * distill_loss
-            else:
-                loss = ground_truth_loss
-        else:
-            logits = self.lm_head(x[:, [-1], :]) # inference-time mini-optimization
-
-        if not return_logits:
-            logits = None
-
-        return logits, loss, ground_truth_loss, distill_loss
-    
+def _load_data_shard(filename):
+    with open(filename, "rb") as f:
+        header = np.frombuffer(f.read(256*4), dtype=np.int32)
+        assert header[0] == 20240520, "magic number mismatch in the data .bin file"
+        assert header[1] == 1, "unsupported version"
+        ntok = header[2]
+        tokens = np.frombuffer(f.read(), dtype=np.uint16)
+    assert len(tokens) == ntok, "number of tokens read does not match header?"
+    return tokens
 
 class DataLoader:
     def __init__(self, filename_pattern, B, T):
-        self.filename_pattern = filename_pattern
+        self.B = B
         self.T = T
-        self.set_batch_size(B)
-        # glob files that match the pattern
         self.files = sorted(glob.glob(filename_pattern))
         assert len(self.files) > 0, f"did not find any files that match the pattern {filename_pattern}"
-
-        # load and validate all data shards, count number of tokens in total
         ntok_total = 0
         for fname in self.files:
             shard_ntok = _peek_data_shard(fname)
             assert shard_ntok >= B * T + 1
             ntok_total += shard_ntok
         self.ntok_total = ntok_total
-        print(f"DataLoader: total number of tokens: {ntok_total:,} across {len(self.files)} files")
-
-        # kick things off
         self.reset()
-
-    def set_batch_size(self, B):
-        self.B = B
 
     def reset(self):
         self.current_shard = 0
         self.current_position = 0
         self.tokens = _load_data_shard(self.files[self.current_shard])
 
-    def advance(self): # advance to next data shard
+    def advance(self):
         self.current_shard = (self.current_shard + 1) % len(self.files)
         self.current_position = 0
         self.tokens = _load_data_shard(self.files[self.current_shard])
 
     def next_batch(self):
-        B = self.B
-        T = self.T
+        B, T = self.B, self.T
         buf = self.tokens[self.current_position : self.current_position+B*T+1]
         buf = torch.tensor(buf.astype(np.int32), dtype=torch.long)
-        x = (buf[:-1]).view(B, T) # inputs
-        y = (buf[1:]).view(B, T) # targets
-        # advance current position and load next shard if necessary
+        x = (buf[:-1]).view(B, T)
+        y = (buf[1:]).view(B, T)
         self.current_position += B * T
         if self.current_position + (B * T + 1) > len(self.tokens):
             self.advance()
         return x.cuda(), y.cuda()
-    
-def _peek_data_shard(filename):
-    # only reads the header, returns header data
-    with open(filename, "rb") as f:
-        # first read the header, which is 256 int32 integers (4 bytes each)
-        header = np.frombuffer(f.read(256*4), dtype=np.int32)
-    if header[0] != 20240520:
-        print("ERROR: magic number mismatch in the data .bin file!")
-        print("---> HINT: Are you passing in a correct file with --input_bin?")
-        print("---> HINT: Dataset encoding changed recently, re-run data prepro or refer again to README")
-        print("---> HINT: For example re-run: `python dev/data/tinyshakespeare.py`, then re-try")
-        exit(1)
-    assert header[1] == 1, "unsupported version"
-    ntok = header[2] # number of tokens (claimed)
-    return ntok # for now just return the number of tokens
 
-def _load_data_shard(filename):
-    with open(filename, "rb") as f:
-        # first read the header, which is 256 int32 integers (4 bytes each)
-        header = np.frombuffer(f.read(256*4), dtype=np.int32)
-        assert header[0] == 20240520, "magic number mismatch in the data .bin file"
-        assert header[1] == 1, "unsupported version"
-        ntok = header[2] # number of tokens (claimed)
-        # the rest of it are tokens, stored as uint16
-        tokens = np.frombuffer(f.read(), dtype=np.uint16)
-    assert len(tokens) == ntok, "number of tokens read does not match header?"
-    return tokens
-
-
-def evaluate_partial_model(model_path, depth=None, input_val_bin="data/fineweb10B/fineweb_val_*.bin", sequence_length=1024, batch_size=42, val_max_steps=20):
+def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=10, sequence_length=1024, val_max_steps=20):
     # Initialize wandb
-    wandb.init(project="gpt2_distill_evaluation", config={
-        "model_path": model_path,
-        "depth": depth,
-        "input_val_bin": input_val_bin,
-        "sequence_length": sequence_length,
+    wandb.init(project="gpt2_evaluation", config={
+        "pre_trained_model_path": pre_trained_model_path,
+        "val_data_pattern": val_data_pattern,
         "batch_size": batch_size,
+        "sequence_length": sequence_length,
         "val_max_steps": val_max_steps,
     })
+    
+    # Load the pre-trained model
+    model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024)
+    model = GPT(model_config)
+    state_dict = torch.load(pre_trained_model_path)
 
-    # Load the saved model
-    checkpoint = torch.load(model_path)
-    config = checkpoint['config']
-    
-    # Use the specified depth or the full depth if not specified
-    new_depth = depth if depth is not None else config.n_layer
-    new_config = GPTConfig(
-        vocab_size=config.vocab_size,
-        n_layer=new_depth,
-        n_head=config.n_head,
-        n_embd=config.n_embd,
-        orig_embd=config.orig_embd
-    )
-    
-    # Initialize the partial model
-    partial_model = GPT(new_config)
-    
-    # Load the specified number of layers from the full model
-    full_state_dict = checkpoint['model_state_dict']
-    partial_state_dict = {}
-    for key, value in full_state_dict.items():
-        if key.startswith('transformer.h.'):
-            layer_num = int(key.split('.')[2])
-            if layer_num < new_depth:
-                new_key = key.replace(f'transformer.h.{layer_num}', f'transformer.h.{layer_num}')
-                partial_state_dict[new_key] = value
-        else:
-            partial_state_dict[key] = value
-    
-    partial_model.load_state_dict(partial_state_dict, strict=False)
-    
-    # Move model to GPU if available
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    partial_model = partial_model.to(device)
-    partial_model.eval()
-    
-    # Set up validation data loader
-    val_loader = DataLoader(input_val_bin, batch_size, sequence_length)
-    
-    # Evaluation loop
-    total_loss = 0.0
+    # Remove the "_orig_mod." prefix from the keys in the state_dict
+    state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+
+    model.load_state_dict(state_dict)
+    model.eval()
+    model.cuda()
+
+    # Load the validation data
+    val_loader = DataLoader(val_data_pattern, batch_size, sequence_length)
+
+    # Evaluate the model
+    val_loader.reset()
     with torch.no_grad():
+        val_loss = 0.0
         for _ in range(val_max_steps):
             x_val, y_val = val_loader.next_batch()
-            x_val, y_val = x_val.to(device), y_val.to(device)
-            _, loss, _, _ = partial_model(x_val, y_val, return_logits=False)
-            total_loss += loss.item()
-    
-    avg_loss = total_loss / val_max_steps
-    perplexity = torch.exp(torch.tensor(avg_loss))
-    
-    print(f"Model Depth: {new_depth}")
-    print(f"Validation Loss: {avg_loss:.4f}")
-    print(f"Perplexity: {perplexity:.4f}")
-    
-    # Log results to wandb
-    wandb.log({
-        "model_depth": new_depth,
-        "val_loss": avg_loss,
-        "perplexity": perplexity
-    })
+            _, loss = model(x_val, y_val, return_logits=False)
+            val_loss += loss.item()
+        val_loss /= val_max_steps
+
+    print(f"Validation loss: {val_loss}")
+    wandb.log({"validation_loss": val_loss})
 
 if __name__ == "__main__":
-    fire.Fire(evaluate_partial_model)
+    pre_trained_model_path = "/home/bsnaas/git/gpt-distill/model/baseline.pt"
+    val_data_pattern = "data/fineweb10B/fineweb_val_*.bin"
+    evaluate_model(pre_trained_model_path, val_data_pattern)
