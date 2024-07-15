@@ -194,7 +194,7 @@ class GPT(nn.Module):
 
         return logits, loss, ground_truth_loss, distill_loss
     
-    
+
 def _peek_data_shard(filename):
     with open(filename, "rb") as f:
         header = np.frombuffer(f.read(256*4), dtype=np.int32)
@@ -264,7 +264,7 @@ def evaluate_model(pre_trained_model_path, val_data_pattern, batch_size=10, sequ
     state_dict = checkpoint['model_state_dict']
 
     # Load the pre-trained model
-    model_config = GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024)
+    model_config = GPTConfig(vocab_size=50257, n_layer=24, n_head=16, n_embd=1024)
     model = GPT(model_config)
 
     # Remove the "_orig_mod." prefix from the keys in the state_dict
