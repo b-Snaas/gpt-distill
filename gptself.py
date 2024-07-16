@@ -354,7 +354,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
         if prev_model:
             # Copy layers from the previous model, starting over if we exceed prev_depth
-            for i in range(depth):
+            for i in range(prev_depth):
                 source_layer_index = i % prev_depth
                 model.transformer.h[i].load_state_dict(prev_model.transformer.h[source_layer_index].state_dict())
                 if i < prev_depth:
