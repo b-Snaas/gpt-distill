@@ -539,18 +539,18 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 p.grad = p.grad / (p.grad.norm() + 1e-6)
 
     
-        # if 10000 <= step <= 10250:
-        #     lr = get_lr(step - 10000, total_iters, warmup_iters, warmdown_iters, current_lr)
-        #     for i, param_group in enumerate(optimizer.param_groups):
-        #         param_group['lr'] = lr
-        # elif 50000 <= step <= 50250:
-        #     lr = get_lr(step - 50000, total_iters, warmup_iters, warmdown_iters, current_lr)
-        #     for i, param_group in enumerate(optimizer.param_groups):
-        #         param_group['lr'] = lr
-        # else:
-        lr = get_lr(step, total_iters, warmup_iters, warmdown_iters, current_lr)
-        for i, param_group in enumerate(optimizer.param_groups):
+        if 10000 <= step <= 10250:
+            lr = get_lr(step - 10000, total_iters, warmup_iters, warmdown_iters, current_lr)
+            for i, param_group in enumerate(optimizer.param_groups):
                 param_group['lr'] = lr
+        elif 50000 <= step <= 50250:
+            lr = get_lr(step - 50000, total_iters, warmup_iters, warmdown_iters, current_lr)
+            for i, param_group in enumerate(optimizer.param_groups):
+                param_group['lr'] = lr
+        else:
+            lr = get_lr(step, total_iters, warmup_iters, warmdown_iters, current_lr)
+            for i, param_group in enumerate(optimizer.param_groups):
+                    param_group['lr'] = lr
 
         # step the optimizer
         optimizer.step()
