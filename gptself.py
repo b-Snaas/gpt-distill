@@ -405,15 +405,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model = torch.compile(model)
         return model, copied_layers, new_layers
 
-    def freeze_layers(layers):
-        for layer in layers:
-            for param in layer.parameters():
-                param.requires_grad = False
+    # def freeze_layers(layers):
+    #     for layer in layers:
+    #         for param in layer.parameters():
+    #             param.requires_grad = False
 
-    def unfreeze_layers(layers):
-        for layer in layers:
-            for param in layer.parameters():
-                param.requires_grad = True
+    # def unfreeze_layers(layers):
+    #     for layer in layers:
+    #         for param in layer.parameters():
+    #             param.requires_grad = True
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
@@ -469,7 +469,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # Initialize variables to keep track of the validation loss
     best_prev_val_loss = float('inf')
-    current_val_loss = 0.0
+    current_val_loss = float('inf')
 
     # Training loop
     while step < total_iters:
