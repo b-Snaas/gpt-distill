@@ -155,25 +155,28 @@ class GPT(nn.Module):
 
     def forward(self, idx, targets=None, return_logits=True):
         b, t = idx.size()
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # shape (t)
 
         # forward the GPT model itself
-        x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+
+        student_hidden_states = []
+        teacher_hidden_states = []
 
         for i, block in enumerate(self.transformer.h):
             x = block(x)
             if i == 11 and self.config.n_embd != self.config.orig_embd:
                 x = self.transformer.proj_down(x)  # Project back up after 12th layer
-            if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
-                teacher_hidden_states = x.detach()
+            if self.distillation_mode and self.prev_max_depth:
+                if i < self.prev_max_depth:
+                    teacher_hidden_states.append(x.detach())
+                elif i >= self.prev_max_depth:
+                    student_hidden_states.append(x)
 
         if self.config.n_embd != self.config.orig_embd:
             x = self.transformer.proj_up(x)
 
         x = rmsnorm(x)
-
-        if self.distillation_mode and self.prev_max_depth:
-            student_hidden_states = x
 
         logits = self.lm_head(x)
         loss = None
@@ -182,17 +185,23 @@ class GPT(nn.Module):
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-            if self.distillation_mode and teacher_hidden_states is not None and student_hidden_states is not None:
-                # Cosine embedding loss
-                batch_size, seq_length, hidden_dim = student_hidden_states.size()
-                cos_loss = F.cosine_embedding_loss(
-                    student_hidden_states.view(-1, hidden_dim),
-                    teacher_hidden_states.view(-1, hidden_dim),
-                    torch.ones(batch_size * seq_length).to(student_hidden_states.device),
-                    reduction='mean'
-                )
+            if self.distillation_mode and teacher_hidden_states and student_hidden_states:
+                cos_losses = []
+                for teacher_state, student_state in zip(teacher_hidden_states, student_hidden_states):
+                    batch_size, seq_length, hidden_dim = student_state.size()
+                    cos_loss = F.cosine_embedding_loss(
+                        student_state.view(-1, hidden_dim),
+                        teacher_state.view(-1, hidden_dim),
+                        torch.ones(batch_size * seq_length).to(student_state.device),
+                        reduction='mean'
+                    )
+                    cos_losses.append(cos_loss)
 
-                loss = ground_truth_loss + cos_loss
+                # Scale and sum cosine losses
+                scaling_factor = 100.0
+                total_cos_loss = sum(cos_losses) * scaling_factor
+
+                loss = ground_truth_loss + total_cos_loss
             else:
                 loss = ground_truth_loss
         else:
