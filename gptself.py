@@ -192,13 +192,7 @@ class GPT(nn.Module):
                     reduction='mean'
                 )
 
-                # Combine losses
-                distill_loss = (
-                    1 * ground_truth_loss +
-                    1 * cos_loss
-                )
-
-                loss = distill_loss
+                loss = ground_truth_loss + cos_loss
             else:
                 loss = ground_truth_loss
         else:
@@ -207,7 +201,7 @@ class GPT(nn.Module):
         if not return_logits:
             logits = None
 
-        return logits, loss, ground_truth_loss, distill_loss
+        return logits, loss, ground_truth_loss, cos_loss
 
 
     def set_distillation_mode(self, mode=True):
