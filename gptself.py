@@ -186,20 +186,21 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and teacher_hidden_states and student_hidden_states:
-                cos_losses = []
-                for teacher_state, student_state in zip(teacher_hidden_states, student_hidden_states):
-                    batch_size, seq_length, hidden_dim = student_state.size()
-                    cos_loss = F.cosine_embedding_loss(
-                        student_state.view(-1, hidden_dim),
-                        teacher_state.view(-1, hidden_dim),
-                        torch.ones(batch_size * seq_length).to(student_state.device),
-                        reduction='mean'
-                    )
-                    cos_losses.append(cos_loss)
+                # Stack the hidden states
+                teacher_hidden_states = torch.stack(teacher_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
+                student_hidden_states = torch.stack(student_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
 
-                # Scale and sum cosine losses
+                # Compute cosine similarity
+                batch_size, seq_length, hidden_dim = student_hidden_states.size(1), student_hidden_states.size(2), student_hidden_states.size(3)
+                teacher_flat = teacher_hidden_states.view(-1, hidden_dim)  # Shape: [layers*batch_size*seq_length, hidden_dim]
+                student_flat = student_hidden_states.view(-1, hidden_dim)  # Shape: [layers*batch_size*seq_length, hidden_dim]
+                target = torch.ones(teacher_flat.size(0)).to(student_flat.device)
+
+                cos_loss = F.cosine_embedding_loss(student_flat, teacher_flat, target, reduction='mean')
+
+                # Scale cosine loss
                 scaling_factor = 100.0
-                total_cos_loss = sum(cos_losses) * scaling_factor
+                total_cos_loss = cos_loss * scaling_factor
 
                 loss = ground_truth_loss + total_cos_loss
             else:
