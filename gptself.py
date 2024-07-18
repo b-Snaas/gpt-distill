@@ -336,7 +336,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             sequence_length=1024,
             warmup_iters=250,
             weight_decay=0.1,
-            val_loss_every=1280, 
+            val_loss_every=500, 
             val_max_steps=20,
             ):
 
@@ -434,8 +434,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
         (6, 16, 1024, 1000, 40, 0.0004),
-        (12, 16, 1024, 40000, 25, 0.00015),
-        (24, 16, 1024, 150000, 15, 0.0001)
+        (12, 16, 1024, 40000, 33, 0.00015),
+        (24, 16, 1024, 150000, 22, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -469,7 +469,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     # Initialize variables to keep track of the validation loss
     best_prev_val_loss = float('inf')
-    current_val_loss = float('inf')
+    current_val_loss = 0.0
 
     # Training loop
     while step < total_iters:
@@ -516,6 +516,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Enable distillation mode for the new model
                 model.set_distillation_mode(True)
                 print("Distillation Mode on")
+                # print best prev val loss
+                print(f"Best previous validation loss: {best_prev_val_loss}")
                 # freeze_layers(copied_layers)  # Freeze the copied layers
 
         t0 = time.time()
