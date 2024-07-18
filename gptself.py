@@ -202,7 +202,7 @@ class GPT(nn.Module):
                 cos_loss = F.cosine_embedding_loss(student_flat, teacher_flat, target, reduction='mean')
 
                 # Scale cosine loss
-                scaling_factor = 10.0
+                scaling_factor = 100.0
                 total_cos_loss = cos_loss * scaling_factor
 
                 loss = ground_truth_loss + total_cos_loss
@@ -513,6 +513,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 # Enable distillation mode for the new model
                 model.set_distillation_mode(True)
+                # print the best previous validation loss
+                print(f"Best previous validation loss: {best_prev_val_loss}")
                 print("Distillation Mode on")
                 # freeze_layers(copied_layers)  # Freeze the copied layers
 
@@ -538,6 +540,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
             # Update the current validation loss
             current_val_loss = val_loss
+
+            # print current val loss
+            print(f"Validation loss: {val_loss}")
 
             # Disable distillation mode if the validation loss is better than the best previous validation loss
             if model.distillation_mode and current_val_loss < best_prev_val_loss:
