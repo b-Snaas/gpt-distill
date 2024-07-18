@@ -150,7 +150,7 @@ class GPT(nn.Module):
             self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
             self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
 
-    def forward(self, idx, targets=None, return_logits=True, gamma=0.2):
+    def forward(self, idx, targets=None, return_logits=True):
         b, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
 
@@ -163,14 +163,16 @@ class GPT(nn.Module):
                 x = self.transformer.proj_down(x)  # Project back up after 12th layer
             if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
                 intermediate_logits = self.lm_head(x).detach()
+                teacher_hidden_states = x.detach()
 
         if self.config.n_embd != self.config.orig_embd:
-            x = self.transformer.proj_up(x)  # Final projection up
+            x = self.transformer.proj_up(x)
 
         if self.distillation_mode and self.prev_max_depth:
             intermediate_logits = rmsnorm(intermediate_logits)
 
         x = rmsnorm(x)
+        student_hidden_states = x
 
         logits = self.lm_head(x)
         loss = None
@@ -180,19 +182,37 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and intermediate_logits is not None:
-                target_output = intermediate_logits.transpose(2, 1)
-                targ = F.softmax(target_output, dim=1)
-                distill_loss = F.cross_entropy(logits.transpose(2, 1), targ, reduction='mean')
-                loss = ground_truth_loss + gamma * distill_loss
+                # Soft distillation loss
+                student_log_probs = F.log_softmax(logits / 12, dim=-1)
+                teacher_probs = F.softmax(intermediate_logits / 12, dim=-1)
+                soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (12 ** 2)
+
+                # Cosine embedding loss
+                batch_size, seq_length, hidden_dim = student_hidden_states.size()
+                cos_loss = self.cos_loss(
+                    student_hidden_states.view(-1, hidden_dim),
+                    teacher_hidden_states.view(-1, hidden_dim),
+                    torch.ones(batch_size * seq_length).to(student_hidden_states.device)
+                )
+
+                # Combine losses
+                distill_loss = (
+                    5 * soft_loss +
+                    1 * ground_truth_loss +
+                    2 * cos_loss
+                )
+
+                loss = distill_loss
             else:
                 loss = ground_truth_loss
         else:
-            logits = self.lm_head(x[:, [-1], :]) # inference-time mini-optimization
+            logits = self.lm_head(x[:, [-1], :])
 
         if not return_logits:
             logits = None
 
         return logits, loss, ground_truth_loss, distill_loss
+
 
     def set_distillation_mode(self, mode=True):
         self.distillation_mode = mode
@@ -401,9 +421,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
-        (6, 16, 1024, 10000, 42, 0.0004),
-        (12, 16, 1024, 40000, 24, 0.00015),
-        (24, 16, 1024, 150000, 16, 0.0001)
+        (6, 16, 1024, 100, 42, 0.0004),
+        (12, 16, 1024, 100, 24, 0.00015),
+        (24, 16, 1024, 100, 16, 0.0001)
     ]
 
     # Print the schedule at the start of training
