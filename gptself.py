@@ -189,10 +189,11 @@ class GPT(nn.Module):
 
                 # Cosine embedding loss
                 batch_size, seq_length, hidden_dim = student_hidden_states.size()
-                cos_loss = self.cos_loss(
+                cos_loss = F.cosine_embedding_loss(
                     student_hidden_states.view(-1, hidden_dim),
                     teacher_hidden_states.view(-1, hidden_dim),
-                    torch.ones(batch_size * seq_length).to(student_hidden_states.device)
+                    torch.ones(batch_size * seq_length).to(student_hidden_states.device),
+                    reduction='mean'
                 )
 
                 # Combine losses
