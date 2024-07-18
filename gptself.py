@@ -182,11 +182,6 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and intermediate_logits is not None:
-                # # Soft distillation loss
-                # student_log_probs = F.log_softmax(logits / 12, dim=-1)
-                # teacher_probs = F.softmax(intermediate_logits / 12, dim=-1)
-                # soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (12 ** 2)
-
                 # Cosine embedding loss
                 batch_size, seq_length, hidden_dim = student_hidden_states.size()
                 cos_loss = F.cosine_embedding_loss(
@@ -198,7 +193,6 @@ class GPT(nn.Module):
 
                 # Combine losses
                 distill_loss = (
-                    # 5 * soft_loss +
                     1 * ground_truth_loss +
                     1 * cos_loss
                 )
