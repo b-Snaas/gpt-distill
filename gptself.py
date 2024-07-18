@@ -177,7 +177,7 @@ class GPT(nn.Module):
 
         logits = self.lm_head(x)
         loss = None
-        distill_loss = None
+        cos_loss = None
 
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
