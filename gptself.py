@@ -54,22 +54,18 @@ def rmsnorm(x0, eps=1e-6):
     return x.type_as(x0)
 
 class CausalSelfAttention(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.head_dim = self.n_embd // self.n_head
         assert self.n_embd % self.n_head == 0
-        # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=False)
-        # output projection
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.rotary = Rotary(self.head_dim)
 
     def forward(self, x):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        B, T, C = x.size()
         qkv = self.c_attn(x)
         q, k, v = qkv.split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, self.head_dim)
@@ -78,11 +74,13 @@ class CausalSelfAttention(nn.Module):
         cos, sin = self.rotary(q)
         q = apply_rotary_emb(q, cos, sin)
         k = apply_rotary_emb(k, cos, sin)
-        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=True)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-        # output projection
+        y, attn_weights = F.scaled_dot_product_attention(
+            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+            is_causal=True, return_attention_weights=True
+        )
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.c_proj(y)
-        return y
+        return y, attn_weights
 
 class MLP(nn.Module):
 
@@ -98,7 +96,6 @@ class MLP(nn.Module):
         return x
 
 class Block(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.attn = CausalSelfAttention(config)
@@ -106,9 +103,11 @@ class Block(nn.Module):
         self.attn_scale = (1 / math.sqrt(2 * config.n_layer))
 
     def forward(self, x):
-        x = x + self.attn_scale * self.attn(rmsnorm(x))
+        attn_output, attn_weights = self.attn(rmsnorm(x))
+        x = x + self.attn_scale * attn_output
         x = x + self.mlp(rmsnorm(x))
-        return x
+        return x, attn_weights
+
 
 # -----------------------------------------------------------------------------
 # The main GPT-2 model
@@ -151,68 +150,79 @@ class GPT(nn.Module):
             self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
 
     def forward(self, idx, targets=None, return_logits=True):
-        b, t = idx.size()
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
+            b, t = idx.size()
+            x = self.transformer.wte(idx)
 
-        # forward the GPT model itself
-        x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+            teacher_hidden_states = None
+            teacher_attn_weights = None
+            intermediate_logits = None
 
-        for i, block in enumerate(self.transformer.h):
-            x = block(x)
-            if i == 11 and self.config.n_embd != self.config.orig_embd:
-                x = self.transformer.proj_down(x)  # Project back up after 12th layer
-            if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
-                intermediate_logits = self.lm_head(x).detach()
-                teacher_hidden_states = x.detach()
+            for i, block in enumerate(self.transformer.h):
+                x, attn_weights = block(x)
+                if i == 11 and self.config.n_embd != self.config.orig_embd:
+                    x = self.transformer.proj_down(x)
+                if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
+                    intermediate_logits = self.lm_head(x).detach()
+                    teacher_hidden_states = x.detach()
+                    teacher_attn_weights = attn_weights.detach()
 
-        if self.config.n_embd != self.config.orig_embd:
-            x = self.transformer.proj_up(x)
+            if self.config.n_embd != self.config.orig_embd:
+                x = self.transformer.proj_up(x)
 
-        if self.distillation_mode and self.prev_max_depth:
-            intermediate_logits = rmsnorm(intermediate_logits)
+            if self.distillation_mode and self.prev_max_depth:
+                intermediate_logits = rmsnorm(intermediate_logits)
 
-        x = rmsnorm(x)
-        student_hidden_states = x
+            x = rmsnorm(x)
+            student_hidden_states = x
+            student_attn_weights = attn_weights  # This is from the last layer
 
-        logits = self.lm_head(x)
-        loss = None
-        distill_loss = None
+            logits = self.lm_head(x)
+            loss = None
+            distill_loss = None
 
-        if targets is not None:
-            ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            if targets is not None:
+                ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-            if self.distillation_mode and intermediate_logits is not None:
-                # Soft distillation loss
-                student_log_probs = F.log_softmax(logits / 12, dim=-1)
-                teacher_probs = F.softmax(intermediate_logits / 12, dim=-1)
-                soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (12 ** 2)
+                if self.distillation_mode and intermediate_logits is not None:
+                    student_log_probs = F.log_softmax(logits / 12, dim=-1)
+                    teacher_probs = F.softmax(intermediate_logits / 12, dim=-1)
+                    soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (12 ** 2)
 
-                # Cosine embedding loss
-                batch_size, seq_length, hidden_dim = student_hidden_states.size()
-                cos_loss = F.cosine_embedding_loss(
-                    student_hidden_states.view(-1, hidden_dim),
-                    teacher_hidden_states.view(-1, hidden_dim),
-                    torch.ones(batch_size * seq_length).to(student_hidden_states.device),
-                    reduction='mean'
-                )
+                    batch_size, seq_length, hidden_dim = student_hidden_states.size()
+                    
+                    # Combine hidden states and attention weights
+                    student_combined = torch.cat([
+                        student_hidden_states.view(-1, hidden_dim),
+                        student_attn_weights.view(batch_size, seq_length, -1)
+                    ], dim=-1)
+                    teacher_combined = torch.cat([
+                        teacher_hidden_states.view(-1, hidden_dim),
+                        teacher_attn_weights.view(batch_size, seq_length, -1)
+                    ], dim=-1)
 
-                # Combine losses
-                distill_loss = (
-                    5 * soft_loss +
-                    1 * ground_truth_loss +
-                    2 * cos_loss
-                )
+                    cos_loss = F.cosine_embedding_loss(
+                        student_combined,
+                        teacher_combined,
+                        torch.ones(batch_size * seq_length).to(student_hidden_states.device),
+                        reduction='mean'
+                    )
 
-                loss = distill_loss
+                    distill_loss = (
+                        5 * soft_loss +
+                        1 * ground_truth_loss +
+                        2 * cos_loss
+                    )
+
+                    loss = distill_loss
+                else:
+                    loss = ground_truth_loss
             else:
-                loss = ground_truth_loss
-        else:
-            logits = self.lm_head(x[:, [-1], :])
+                logits = self.lm_head(x[:, [-1], :])
 
-        if not return_logits:
-            logits = None
+            if not return_logits:
+                logits = None
 
-        return logits, loss, ground_truth_loss, distill_loss
+            return logits, loss, ground_truth_loss, distill_loss
 
 
     def set_distillation_mode(self, mode=True):
