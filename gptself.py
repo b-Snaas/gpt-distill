@@ -182,10 +182,14 @@ class GPT(nn.Module):
         loss = None
         total_cos_loss = None
 
+        # print distillation mode status
+        print(f"Distillation Mode: {self.distillation_mode}")
+
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and teacher_hidden_states and student_hidden_states:
+                print(f"Distilling while distillation mode: {self.distillation_mode}")
                 # Stack the hidden states
                 teacher_hidden_states = torch.stack(teacher_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
                 student_hidden_states = torch.stack(student_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
@@ -429,9 +433,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
-        (6, 16, 1024, 10000, 42, 0.0004),
-        (12, 16, 1024, 40000, 35, 0.00015),
-        (24, 16, 1024, 150000, 24, 0.0001)
+        (6, 16, 1024, 1000, 42, 0.0004),
+        (12, 16, 1024, 40000, 25, 0.00015),
+        (24, 16, 1024, 150000, 15, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -540,7 +544,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             # Disable distillation mode if the validation loss is better than the best previous validation loss
             if model.distillation_mode and current_val_loss < best_prev_val_loss:
                 model.set_distillation_mode(False)
-                print("Distillation Mode off")
+                #print distillation off at epoch X
+                print(f"Distillation Mode off at step {step}")
                 # unfreeze_layers(copied_layers)  # Unfreeze the copied layers
 
         if step == total_iters:
