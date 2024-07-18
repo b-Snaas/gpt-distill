@@ -186,6 +186,9 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and teacher_hidden_states and student_hidden_states:
+                #Print that we are distilling and what the distillation mode status is
+                print("Distilling")
+                print(f"Distillation Mode: {self.distillation_mode}")
                 # Stack the hidden states
                 teacher_hidden_states = torch.stack(teacher_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
                 student_hidden_states = torch.stack(student_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
@@ -540,7 +543,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if model.distillation_mode and current_val_loss < best_prev_val_loss:
                 model.set_distillation_mode(False)
                 #print distillation off at epoch X
-                print("Distillation Mode off")
+                print(f"Distillation Mode off at step {step}")
                 # unfreeze_layers(copied_layers)  # Unfreeze the copied layers
 
         if step == total_iters:
