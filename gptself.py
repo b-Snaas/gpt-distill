@@ -182,14 +182,10 @@ class GPT(nn.Module):
         loss = None
         total_cos_loss = None
 
-        # print distillation mode status
-        print(f"Distillation Mode: {self.distillation_mode}")
-
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if self.distillation_mode and teacher_hidden_states and student_hidden_states:
-                print(f"Distilling while distillation mode: {self.distillation_mode}")
                 # Stack the hidden states
                 teacher_hidden_states = torch.stack(teacher_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
                 student_hidden_states = torch.stack(student_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
@@ -336,7 +332,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             sequence_length=1024,
             warmup_iters=250,
             weight_decay=0.1,
-            val_loss_every=500, 
+            val_loss_every=1280, 
             val_max_steps=20,
             ):
 
@@ -405,15 +401,15 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         model = torch.compile(model)
         return model, copied_layers, new_layers
 
-    # def freeze_layers(layers):
-    #     for layer in layers:
-    #         for param in layer.parameters():
-    #             param.requires_grad = False
+    def freeze_layers(layers):
+        for layer in layers:
+            for param in layer.parameters():
+                param.requires_grad = False
 
-    # def unfreeze_layers(layers):
-    #     for layer in layers:
-    #         for param in layer.parameters():
-    #             param.requires_grad = True
+    def unfreeze_layers(layers):
+        for layer in layers:
+            for param in layer.parameters():
+                param.requires_grad = True
 
     def reinitialize_optimizer(model, learning_rate, weight_decay):
         optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
@@ -433,9 +429,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
-        (6, 16, 1024, 1000, 40, 0.0004),
-        (12, 16, 1024, 40000, 33, 0.00015),
-        (24, 16, 1024, 150000, 22, 0.0001)
+        (6, 16, 1024, 100, 42, 0.0004),
+        (12, 16, 1024, 100, 35, 0.00015),
+        (24, 16, 1024, 100, 24, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -495,7 +491,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 del optimizer
 
                 clear_memory()
-
                 # Initialize the new model with weights from the previous model
                 model, copied_layers, new_layers = initialize_model(current_depth, prev_model=prev_model, n_head=current_head, n_embd=current_embd)
                 optimizer = reinitialize_optimizer(model, new_lr, weight_decay)
@@ -516,8 +511,6 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Enable distillation mode for the new model
                 model.set_distillation_mode(True)
                 print("Distillation Mode on")
-                # print best prev val loss
-                print(f"Best previous validation loss: {best_prev_val_loss}")
                 # freeze_layers(copied_layers)  # Freeze the copied layers
 
         t0 = time.time()
@@ -547,7 +540,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if model.distillation_mode and current_val_loss < best_prev_val_loss:
                 model.set_distillation_mode(False)
                 #print distillation off at epoch X
-                print(f"Distillation Mode off at step {step}")
+                print("Distillation Mode off")
                 # unfreeze_layers(copied_layers)  # Unfreeze the copied layers
 
         if step == total_iters:
