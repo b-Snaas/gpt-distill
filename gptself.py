@@ -512,7 +512,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # Enable distillation mode for the new model
                 model.set_distillation_mode(True)
                 print("Distillation Mode on")
-                freeze_layers(copied_layers)  # Freeze the copied layers
+                # freeze_layers(copied_layers)  # Freeze the copied layers
 
         t0 = time.time()
 
@@ -541,7 +541,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if model.distillation_mode and current_val_loss < best_prev_val_loss:
                 model.set_distillation_mode(False)
                 print("Distillation Mode off")
-                unfreeze_layers(copied_layers)  # Unfreeze the copied layers
+                # unfreeze_layers(copied_layers)  # Unfreeze the copied layers
 
         if step == total_iters:
             break
