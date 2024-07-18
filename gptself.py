@@ -129,6 +129,9 @@ class GPT(nn.Module):
         self.distillation_mode = False
         self.prev_max_depth = prev_config.n_layer if prev_config else None
 
+        # Print the self.prev_max_depth
+        print(f"Previous max depth: {self.prev_max_depth}")
+
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.orig_embd),
             h = nn.ModuleList()
@@ -162,17 +165,15 @@ class GPT(nn.Module):
             if i == 11 and self.config.n_embd != self.config.orig_embd:
                 x = self.transformer.proj_down(x)  # Project back up after 12th layer
             if self.distillation_mode and self.prev_max_depth and i == self.prev_max_depth - 1:
-                intermediate_logits = self.lm_head(x).detach()
                 teacher_hidden_states = x.detach()
 
         if self.config.n_embd != self.config.orig_embd:
             x = self.transformer.proj_up(x)
 
-        if self.distillation_mode and self.prev_max_depth:
-            intermediate_logits = rmsnorm(intermediate_logits)
-
         x = rmsnorm(x)
-        student_hidden_states = x
+
+        if self.distillation_mode and self.prev_max_depth:
+            student_hidden_states = x
 
         logits = self.lm_head(x)
         loss = None
@@ -181,7 +182,7 @@ class GPT(nn.Module):
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-            if self.distillation_mode and intermediate_logits is not None:
+            if self.distillation_mode and teacher_hidden_states is not None and student_hidden_states is not None:
                 # Cosine embedding loss
                 batch_size, seq_length, hidden_dim = student_hidden_states.size()
                 cos_loss = F.cosine_embedding_loss(
@@ -368,15 +369,23 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         new_layers = []
 
         if prev_model:
-            # Copy layers from the previous model, starting over if we exceed prev_depth
-            for i in range(prev_depth):
-                source_layer_index = i % prev_depth
-                model.transformer.h[i].load_state_dict(prev_model.transformer.h[source_layer_index].state_dict())
+            for i in range(depth):
                 if i < prev_depth:
+                    # Copy entire layer
+                    model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
                     copied_layers.append(model.transformer.h[i])
                 else:
-                    new_layers.append(model.transformer.h[i])
-            
+                    # Copy attention weights and rotary stuff only
+                    new_layer = model.transformer.h[i]
+                    prev_layer = prev_model.transformer.h[i % prev_depth]
+
+                    # Copy attention-related parameters
+                    new_layer.attn.c_attn.weight.data.copy_(prev_layer.attn.c_attn.weight.data)
+                    new_layer.attn.c_proj.weight.data.copy_(prev_layer.attn.c_proj.weight.data)
+                    new_layer.attn.rotary.inv_freq.data.copy_(prev_layer.attn.rotary.inv_freq.data)
+                    
+                    new_layers.append(new_layer)
+
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
             copied_layers.append(model.transformer.wte)
@@ -416,9 +425,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
-        (6, 16, 1024, 10000, 42, 0.0004),
-        (12, 16, 1024, 40000, 24, 0.00015),
-        (24, 16, 1024, 150000, 16, 0.0001)
+        (6, 16, 1024, 100, 42, 0.0004),
+        (12, 16, 1024, 100, 35, 0.00015),
+        (24, 16, 1024, 100, 24, 0.0001)
     ]
 
     # Print the schedule at the start of training
