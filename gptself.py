@@ -210,7 +210,7 @@ class GPT(nn.Module):
         if not return_logits:
             logits = None
 
-        return logits, loss, ground_truth_loss, cos_loss
+        return logits, loss, ground_truth_loss, total_cos_loss
 
 
     def set_distillation_mode(self, mode=True):
