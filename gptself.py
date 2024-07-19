@@ -159,6 +159,9 @@ class GPT(nn.Module):
         # forward the GPT model itself
         x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
 
+        teacher_hidden_states = None
+        intermediate_logits = None
+
         for i, block in enumerate(self.transformer.h):
             x = block(x)
             if i == 11 and self.config.n_embd != self.config.orig_embd:
@@ -172,20 +175,20 @@ class GPT(nn.Module):
 
         if distillation_mode is True:
             student_hidden_states = x
-            intermediate_logits = rmsnorm(intermediate_logits)
+            if intermediate_logits is not None:
+                intermediate_logits = rmsnorm(intermediate_logits)
         x = rmsnorm(x)
 
         logits = self.lm_head(x)
         loss = None
+        ground_truth_loss = None
         total_cos_loss = None
 
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-            if distillation_mode is True and teacher_hidden_states and student_hidden_states:
-                ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-
-                if distillation_mode and intermediate_logits is not None:
+            if distillation_mode is True and teacher_hidden_states is not None and student_hidden_states is not None:
+                if intermediate_logits is not None:
                     # Soft distillation loss
                     student_log_probs = F.log_softmax(logits / 6, dim=-1)
                     teacher_probs = F.softmax(intermediate_logits / 6, dim=-1)
@@ -216,6 +219,7 @@ class GPT(nn.Module):
             logits = None
 
         return logits, loss, ground_truth_loss, total_cos_loss
+
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
