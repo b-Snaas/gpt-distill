@@ -185,9 +185,6 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if distillation_mode is True and teacher_hidden_states and student_hidden_states:
-                #Print that we are distilling and what the distillation mode status is
-                print("Distilling")
-                print(f"Distillation Mode: {distillation_mode}")
                 # Stack the hidden states
                 teacher_hidden_states = torch.stack(teacher_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
                 student_hidden_states = torch.stack(student_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
@@ -330,7 +327,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             sequence_length=1024,
             warmup_iters=250,
             weight_decay=0.1,
-            val_loss_every=510, 
+            val_loss_every=1280, 
             val_max_steps=20,
             ):
 
@@ -427,9 +424,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
-        (6, 16, 1024, 1000, 42, 0.0004),
-        (12, 16, 1024, 1000, 25, 0.00015),
-        (24, 16, 1024, 1000, 15, 0.0001)
+        (6, 16, 1024, 10000, 42, 0.0004),
+        (12, 16, 1024, 40000, 28, 0.00015),
+        (24, 16, 1024, 150000, 18, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -546,6 +543,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             if distillation_mode is True and current_val_loss < best_prev_val_loss:
                 distillation_mode = False
                 #print distillation off at epoch X
+                print(f"current val loss: {current_val_loss}")
+                print(f"best prev val loss: {best_prev_val_loss}")
                 print(f"Distillation Mode off at step {step}")
                 # unfreeze_layers(copied_layers)  # Unfreeze the copied layers
 
