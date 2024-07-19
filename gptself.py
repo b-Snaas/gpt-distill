@@ -198,7 +198,7 @@ class GPT(nn.Module):
                 cos_loss = F.cosine_embedding_loss(student_flat, teacher_flat, target, reduction='mean')
 
                 # Scale cosine loss
-                scaling_factor = 50.0
+                scaling_factor = 5.0
                 total_cos_loss = cos_loss * scaling_factor
 
                 loss = ground_truth_loss + total_cos_loss
@@ -374,17 +374,16 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                     model.transformer.h[i].load_state_dict(prev_model.transformer.h[i].state_dict())
                     copied_layers.append(model.transformer.h[i])
                 else:
-                    continue
-                    # # Copy attention weights and rotary stuff only
-                    # new_layer = model.transformer.h[i]
-                    # prev_layer = prev_model.transformer.h[i % prev_depth]
+                    # Copy attention weights and rotary stuff only
+                    new_layer = model.transformer.h[i]
+                    prev_layer = prev_model.transformer.h[i % prev_depth]
 
-                    # # Copy attention-related parameters
-                    # new_layer.attn.c_attn.weight.data.copy_(prev_layer.attn.c_attn.weight.data)
-                    # new_layer.attn.c_proj.weight.data.copy_(prev_layer.attn.c_proj.weight.data)
-                    # new_layer.attn.rotary.inv_freq.data.copy_(prev_layer.attn.rotary.inv_freq.data)
+                    # Copy attention-related parameters
+                    new_layer.attn.c_attn.weight.data.copy_(prev_layer.attn.c_attn.weight.data)
+                    new_layer.attn.c_proj.weight.data.copy_(prev_layer.attn.c_proj.weight.data)
+                    new_layer.attn.rotary.inv_freq.data.copy_(prev_layer.attn.rotary.inv_freq.data)
                     
-                    # new_layers.append(new_layer)
+                    new_layers.append(new_layer)
 
             # Copy embedding weights
             model.transformer.wte.weight.data.copy_(prev_model.transformer.wte.weight.data)
