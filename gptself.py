@@ -182,7 +182,6 @@ class GPT(nn.Module):
         logits = self.lm_head(x)
         loss = None
         ground_truth_loss = None
-        total_cos_loss = None
 
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
@@ -190,25 +189,16 @@ class GPT(nn.Module):
             if distillation_mode is True and teacher_hidden_states is not None and student_hidden_states is not None:
                 if intermediate_logits is not None:
                     # Soft distillation loss
-                    student_log_probs = F.log_softmax(logits / 6, dim=-1)
-                    teacher_probs = F.softmax(intermediate_logits / 6, dim=-1)
-                    soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (6 ** 2)
-
-                    # Cosine embedding loss
-                    batch_size, seq_length, hidden_dim = student_hidden_states.size()
-                    cos_loss = F.cosine_embedding_loss(
-                        student_hidden_states.view(-1, hidden_dim),
-                        teacher_hidden_states.view(-1, hidden_dim),
-                        torch.ones(batch_size * seq_length).to(student_hidden_states.device),
-                        reduction='mean'
-                    )
+                    student_log_probs = F.log_softmax(logits / 2, dim=-1)
+                    teacher_probs = F.softmax(intermediate_logits / 2, dim=-1)
+                    soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (2 ** 2)
 
                     # Combine losses
                     distill_loss = (
                         5 * soft_loss +
-                        1 * ground_truth_loss +
-                        2 * cos_loss
+                        1 * ground_truth_loss
                     )
+
                     loss = distill_loss
             else:
                 loss = ground_truth_loss
@@ -218,7 +208,7 @@ class GPT(nn.Module):
         if not return_logits:
             logits = None
 
-        return logits, loss, ground_truth_loss, total_cos_loss
+        return logits, loss, ground_truth_loss, distill_loss
 
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
