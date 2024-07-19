@@ -126,7 +126,6 @@ class GPT(nn.Module):
     def __init__(self, config, prev_config=None):
         super().__init__()
         self.config = config
-        self.distillation_mode = False
         self.prev_max_depth = prev_config.n_layer if prev_config else None
 
         # Print the self.prev_max_depth
@@ -153,7 +152,7 @@ class GPT(nn.Module):
             self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
             self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
 
-    def forward(self, idx, targets=None, return_logits=True):
+    def forward(self, idx, targets=None, return_logits=True, distillation_mode=False):
         b, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # shape (t)
 
@@ -167,7 +166,7 @@ class GPT(nn.Module):
             x = block(x)
             if i == 11 and self.config.n_embd != self.config.orig_embd:
                 x = self.transformer.proj_down(x)  # Project back up after 12th layer
-            if self.distillation_mode and self.prev_max_depth:
+            if distillation_mode is True and self.prev_max_depth:
                 if i < self.prev_max_depth:
                     teacher_hidden_states.append(x.detach())
                 elif i >= self.prev_max_depth:
@@ -185,7 +184,7 @@ class GPT(nn.Module):
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-            if self.distillation_mode and teacher_hidden_states and student_hidden_states:
+            if distillation_mode is True and teacher_hidden_states and student_hidden_states:
                 #Print that we are distilling and what the distillation mode status is
                 print("Distilling")
                 print(f"Distillation Mode: {self.distillation_mode}")
@@ -202,7 +201,7 @@ class GPT(nn.Module):
                 cos_loss = F.cosine_embedding_loss(student_flat, teacher_flat, target, reduction='mean')
 
                 # Scale cosine loss
-                scaling_factor = 100.0
+                scaling_factor = 50.0
                 total_cos_loss = cos_loss * scaling_factor
 
                 loss = ground_truth_loss + total_cos_loss
@@ -215,10 +214,6 @@ class GPT(nn.Module):
             logits = None
 
         return logits, loss, ground_truth_loss, total_cos_loss
-
-
-    def set_distillation_mode(self, mode=True):
-        self.distillation_mode = mode
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
@@ -466,6 +461,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     steps_in_prev_schedules = 0
     steps_in_current_schedule = 0
 
+    distillation_mode = False
+
     # Initialize variables to keep track of the validation loss
     best_prev_val_loss = float('inf')
     current_val_loss = float('inf')
@@ -512,7 +509,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 print_model_details(model)
 
                 # Enable distillation mode for the new model
-                model.set_distillation_mode(True)
+                distillation_mode = True
                 # print the best previous validation loss
                 print(f"Best previous validation loss: {best_prev_val_loss}")
                 print("Distillation Mode on")
@@ -529,8 +526,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 for _ in range(val_max_steps):
                     x_val, y_val = val_loader.next_batch()
                     _, loss, ground_truth_loss, distill_loss = model(
-                        x_val, y_val, 
+                        x_val, y_val,
                         return_logits=False, 
+                        distillation_mode=distillation_mode
                     )
                     val_loss += ground_truth_loss.item()
                 val_loss /= val_max_steps
@@ -546,7 +544,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
             # Disable distillation mode if the validation loss is better than the best previous validation loss
             if model.distillation_mode and current_val_loss < best_prev_val_loss:
-                model.set_distillation_mode(False)
+                distillation_mode = False
                 #print distillation off at epoch X
                 print(f"Distillation Mode off at step {step}")
                 # unfreeze_layers(copied_layers)  # Unfreeze the copied layers
@@ -560,7 +558,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
         with ctx:
             _, loss, ground_truth_loss, distill_loss = model(
                 x, y, 
-                return_logits=False, 
+                return_logits=False,
+                distillation_mode=distillation_mode
             )
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
