@@ -543,7 +543,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             print(f"Validation loss: {val_loss}")
 
             # Disable distillation mode if the validation loss is better than the best previous validation loss
-            if model.distillation_mode and current_val_loss < best_prev_val_loss:
+            if distillation_mode is True and current_val_loss < best_prev_val_loss:
                 distillation_mode = False
                 #print distillation off at epoch X
                 print(f"Distillation Mode off at step {step}")
