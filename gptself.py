@@ -166,11 +166,11 @@ class GPT(nn.Module):
             x = block(x)
             if i == 11 and self.config.n_embd != self.config.orig_embd:
                 x = self.transformer.proj_down(x)  # Project back up after 12th layer
-            if distillation_mode is True and self.prev_max_depth:
-                if i < self.prev_max_depth:
-                    teacher_hidden_states.append(x.detach())
-                elif i >= self.prev_max_depth:
-                    student_hidden_states.append(x)
+            # if distillation_mode is True and self.prev_max_depth:
+            #     if i < self.prev_max_depth:
+            #         teacher_hidden_states.append(x.detach())
+            #     elif i >= self.prev_max_depth:
+            #         student_hidden_states.append(x)
 
         if self.config.n_embd != self.config.orig_embd:
             x = self.transformer.proj_up(x)
@@ -184,26 +184,26 @@ class GPT(nn.Module):
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-            if distillation_mode is True and teacher_hidden_states and student_hidden_states:
-                # Stack the hidden states
-                teacher_hidden_states = torch.stack(teacher_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
-                student_hidden_states = torch.stack(student_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
+            # if distillation_mode is True and teacher_hidden_states and student_hidden_states:
+            #     # Stack the hidden states
+            #     teacher_hidden_states = torch.stack(teacher_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
+            #     student_hidden_states = torch.stack(student_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
 
-                # Compute cosine similarity
-                batch_size, seq_length, hidden_dim = student_hidden_states.size(1), student_hidden_states.size(2), student_hidden_states.size(3)
-                teacher_flat = teacher_hidden_states.view(-1, hidden_dim)  # Shape: [layers*batch_size*seq_length, hidden_dim]
-                student_flat = student_hidden_states.view(-1, hidden_dim)  # Shape: [layers*batch_size*seq_length, hidden_dim]
-                target = torch.ones(teacher_flat.size(0)).to(student_flat.device)
+            #     # Compute cosine similarity
+            #     batch_size, seq_length, hidden_dim = student_hidden_states.size(1), student_hidden_states.size(2), student_hidden_states.size(3)
+            #     teacher_flat = teacher_hidden_states.view(-1, hidden_dim)  # Shape: [layers*batch_size*seq_length, hidden_dim]
+            #     student_flat = student_hidden_states.view(-1, hidden_dim)  # Shape: [layers*batch_size*seq_length, hidden_dim]
+            #     target = torch.ones(teacher_flat.size(0)).to(student_flat.device)
 
-                cos_loss = F.cosine_embedding_loss(student_flat, teacher_flat, target, reduction='mean')
+            #     cos_loss = F.cosine_embedding_loss(student_flat, teacher_flat, target, reduction='mean')
 
-                # Scale cosine loss
-                scaling_factor = 5.0
-                total_cos_loss = cos_loss * scaling_factor
+            #     # Scale cosine loss
+            #     scaling_factor = 5.0
+            #     total_cos_loss = cos_loss * scaling_factor
 
-                loss = ground_truth_loss + total_cos_loss
-            else:
-                loss = ground_truth_loss
+            #     loss = ground_truth_loss + total_cos_loss
+            # else:
+            loss = ground_truth_loss
         else:
             logits = self.lm_head(x[:, [-1], :])
 
@@ -425,8 +425,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
         (6, 16, 1024, 10000, 42, 0.0004),
-        (12, 16, 1024, 40000, 28, 0.00015),
-        (24, 16, 1024, 150000, 18, 0.0001)
+        (12, 16, 1024, 40000, 35, 0.00015),
+        (24, 16, 1024, 150000, 24, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -505,12 +505,12 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
                 print_model_details(model)
 
-                # Enable distillation mode for the new model
-                distillation_mode = True
-                # print the best previous validation loss
-                print(f"Best previous validation loss: {best_prev_val_loss}")
-                print("Distillation Mode on")
-                freeze_layers(copied_layers)  # Freeze the copied layers
+                # # Enable distillation mode for the new model
+                # distillation_mode = True
+                # # print the best previous validation loss
+                # print(f"Best previous validation loss: {best_prev_val_loss}")
+                # print("Distillation Mode on")
+                # freeze_layers(copied_layers)  # Freeze the copied layer
 
         t0 = time.time()
 
@@ -539,14 +539,14 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
             # print current val loss
             print(f"Validation loss: {val_loss}")
 
-            # Disable distillation mode if the validation loss is better than the best previous validation loss
-            if distillation_mode is True and current_val_loss < best_prev_val_loss:
-                distillation_mode = False
-                #print distillation off at epoch X
-                print(f"current val loss: {current_val_loss}")
-                print(f"best prev val loss: {best_prev_val_loss}")
-                print(f"Distillation Mode off at step {step}")
-                unfreeze_layers(copied_layers)  # Unfreeze the copied layers
+            # # Disable distillation mode if the validation loss is better than the best previous validation loss
+            # if distillation_mode is True and current_val_loss < best_prev_val_loss:
+            #     distillation_mode = False
+            #     #print distillation off at epoch X
+            #     print(f"current val loss: {current_val_loss}")
+            #     print(f"best prev val loss: {best_prev_val_loss}")
+            #     print(f"Distillation Mode off at step {step}")
+            #     # unfreeze_layers(copied_layers)  # Unfreeze the copied layers
 
         if step == total_iters:
             break
