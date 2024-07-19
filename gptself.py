@@ -510,7 +510,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 # print the best previous validation loss
                 print(f"Best previous validation loss: {best_prev_val_loss}")
                 print("Distillation Mode on")
-                # freeze_layers(copied_layers)  # Freeze the copied layers
+                freeze_layers(copied_layers)  # Freeze the copied layers
 
         t0 = time.time()
 
@@ -546,7 +546,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 print(f"current val loss: {current_val_loss}")
                 print(f"best prev val loss: {best_prev_val_loss}")
                 print(f"Distillation Mode off at step {step}")
-                # unfreeze_layers(copied_layers)  # Unfreeze the copied layers
+                unfreeze_layers(copied_layers)  # Unfreeze the copied layers
 
         if step == total_iters:
             break
