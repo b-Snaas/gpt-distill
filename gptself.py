@@ -187,7 +187,7 @@ class GPT(nn.Module):
             if distillation_mode is True and teacher_hidden_states and student_hidden_states:
                 #Print that we are distilling and what the distillation mode status is
                 print("Distilling")
-                print(f"Distillation Mode: {self.distillation_mode}")
+                print(f"Distillation Mode: {distillation_mode}")
                 # Stack the hidden states
                 teacher_hidden_states = torch.stack(teacher_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
                 student_hidden_states = torch.stack(student_hidden_states)  # Shape: [layers, batch_size, seq_length, hidden_dim]
