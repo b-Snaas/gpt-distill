@@ -168,20 +168,17 @@ class GPT(nn.Module):
             if distillation_mode is True and self.prev_max_depth and i == self.prev_max_depth - 1:
                 intermediate_logits = self.lm_head(x)
 
-                # Logging the intermediate logits
+                # Logging the intermediate logits before adjustment
                 print(f"Intermediate logits before adjustment at layer {i}: {intermediate_logits}")
-
-                if intermediate_logits is not None:
-                    intermediate_logits = rmsnorm(intermediate_logits)
-                    # Logging the intermediate logits after adjustment
-                    print(f"Intermediate logits after adjustment at layer {i}: {intermediate_logits}")
 
         if self.config.n_embd != self.config.orig_embd:
             x = self.transformer.proj_up(x)
 
-        if distillation_mode is True:
-            if intermediate_logits is not None:
-                intermediate_logits = rmsnorm(intermediate_logits)
+        if distillation_mode is True and intermediate_logits is not None:
+            intermediate_logits = rmsnorm(intermediate_logits)
+            # Logging the intermediate logits after adjustment
+            print(f"Intermediate logits after adjustment: {intermediate_logits}")
+
         x = rmsnorm(x)
 
         logits = self.lm_head(x)
@@ -194,8 +191,9 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if distillation_mode is True and intermediate_logits is not None:
-
-                print(f"Intermediate logits after adjustment at layer {i}: {logits}")
+                # Logging the final logits and ground truth loss
+                print(f"Final logits: {logits}")
+                print(f"Ground truth loss: {ground_truth_loss}")
 
                 # Soft distillation loss
                 student_log_probs = F.log_softmax(logits / 2, dim=-1)
@@ -215,12 +213,8 @@ class GPT(nn.Module):
 
                 loss = distill_loss
 
-                                # Logging the final logits and losses
-                print(f"Final logits: {logits}")
-                print(f"Ground truth loss: {ground_truth_loss}")
+                # Logging the distillation loss
                 print(f"Distillation loss: {distill_loss}")
-                print(f"Soft loss: {soft_loss}")
-
             else:
                 loss = ground_truth_loss
         else:
