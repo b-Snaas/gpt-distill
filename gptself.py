@@ -147,79 +147,80 @@ class GPT(nn.Module):
 
         self.lm_head = nn.Linear(config.orig_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight
+        self.layer_norm = nn.LayerNorm(config.hidden_size, eps=1e-5)
 
         if config.n_embd != config.orig_embd:
             self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
             self.transformer.proj_up = nn.Linear(config.n_embd, config.orig_embd)
 
     def forward(self, idx, targets=None, return_logits=True, distillation_mode=False):
-        b, t = idx.size()
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # shape (t)
+            b, t = idx.size()
+            pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # shape (t)
 
-        # forward the GPT model itself
-        x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+            # forward the GPT model itself
+            x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
 
-        intermediate_logits = None
+            intermediate_logits = None
 
-        for i, block in enumerate(self.transformer.h):
-            x = block(x)
-            if i == 11 and self.config.n_embd != self.config.orig_embd:
-                x = self.transformer.proj_down(x)  # Project back up after 12th layer
-            if distillation_mode is True and self.prev_max_depth and i == self.prev_max_depth - 1:
-                x = rmsnorm(x)
-                intermediate_logits = self.lm_head(x)
+            for i, block in enumerate(self.transformer.h):
+                x = block(x)
+                if i == 11 and self.config.n_embd != self.config.orig_embd:
+                    x = self.transformer.proj_down(x)  # Project back up after 12th layer
+                if distillation_mode is True and self.prev_max_depth and i == self.prev_max_depth - 1:
+                    x = self.layer_norm(x)
+                    intermediate_logits = self.lm_head(x)
 
-                # Logging the intermediate logits before adjustment
-                print(f"Intermediate logits at layer {i}: {intermediate_logits}")
+                    # Logging the intermediate logits before adjustment
+                    print(f"Intermediate logits at layer {i}: {intermediate_logits}")
 
-        if self.config.n_embd != self.config.orig_embd:
-            x = self.transformer.proj_up(x)
+            if self.config.n_embd != self.config.orig_embd:
+                x = self.transformer.proj_up(x)
 
-        x = rmsnorm(x)
+            x = self.layer_norm(x)
 
-        logits = self.lm_head(x)
-        loss = None
-        ground_truth_loss = None
-        distill_loss = None
-        soft_loss = None
+            logits = self.lm_head(x)
+            loss = None
+            ground_truth_loss = None
+            distill_loss = None
+            soft_loss = None
 
-        if targets is not None:
-            ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            if targets is not None:
+                ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-            if distillation_mode is True and intermediate_logits is not None:
-                # Logging the final logits and ground truth loss
-                print(f"Final logits: {logits}")
-                print(f"Ground truth loss: {ground_truth_loss}")
+                if distillation_mode is True and intermediate_logits is not None:
+                    # Logging the final logits and ground truth loss
+                    print(f"Final logits: {logits}")
+                    print(f"Ground truth loss: {ground_truth_loss}")
 
-                # Soft distillation loss
-                student_log_probs = F.log_softmax(logits / 2, dim=-1)
-                teacher_probs = F.softmax(intermediate_logits / 2, dim=-1)
-                soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (2 ** 2)
+                    # Soft distillation loss
+                    student_log_probs = F.log_softmax(logits / 2, dim=-1)
+                    teacher_probs = F.softmax(intermediate_logits / 2, dim=-1)
+                    soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (2 ** 2)
 
-                # Logging the soft loss components
-                print(f"Student log probs: {student_log_probs}")
-                print(f"Teacher probs: {teacher_probs}")
-                print(f"Soft loss: {soft_loss}")
+                    # Logging the soft loss components
+                    print(f"Student log probs: {student_log_probs}")
+                    print(f"Teacher probs: {teacher_probs}")
+                    print(f"Soft loss: {soft_loss}")
 
-                # Combine losses
-                distill_loss = (
-                    5 * soft_loss +
-                    1 * ground_truth_loss
-                )
+                    # Combine losses
+                    distill_loss = (
+                        5 * soft_loss +
+                        1 * ground_truth_loss
+                    )
 
-                loss = distill_loss
+                    loss = distill_loss
 
-                # Logging the distillation loss
-                print(f"Distillation loss: {distill_loss}")
+                    # Logging the distillation loss
+                    print(f"Distillation loss: {distill_loss}")
+                else:
+                    loss = ground_truth_loss
             else:
-                loss = ground_truth_loss
-        else:
-            logits = self.lm_head(x[:, [-1], :])
+                logits = self.lm_head(x[:, [-1], :])
 
-        if not return_logits:
-            logits = None
+            if not return_logits:
+                logits = None
 
-        return logits, loss, ground_truth_loss, distill_loss
+            return logits, loss, ground_truth_loss, distill_loss
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
