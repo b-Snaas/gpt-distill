@@ -419,9 +419,9 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
-        (6, 16, 1024, 100, 42, 0.0004),
-        (12, 16, 1024, 100, 24, 0.00015),
-        (24, 16, 1024, 100, 16, 0.0001)
+        (6, 16, 1024, 10000, 42, 0.0004),
+        (12, 16, 1024, 40000, 24, 0.00015),
+        (24, 16, 1024, 150000, 16, 0.0001)
     ]
 
     # Print the schedule at the start of training
@@ -541,7 +541,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
                 print(f"current val loss: {current_val_loss}")
                 print(f"best prev val loss: {best_prev_val_loss}")
                 print(f"Distillation Mode off at step {step}")
-                # unfreeze_layers(copied_layers)  # Unfreeze the copied layers
+                unfreeze_layers(copied_layers)  # Unfreeze the copied layers
 
         if step == total_iters:
             break
