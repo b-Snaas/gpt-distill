@@ -159,7 +159,6 @@ class GPT(nn.Module):
         # forward the GPT model itself
         x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
 
-        teacher_hidden_states = None
         intermediate_logits = None
 
         for i, block in enumerate(self.transformer.h):
@@ -167,14 +166,20 @@ class GPT(nn.Module):
             if i == 11 and self.config.n_embd != self.config.orig_embd:
                 x = self.transformer.proj_down(x)  # Project back up after 12th layer
             if distillation_mode is True and self.prev_max_depth and i == self.prev_max_depth - 1:
-                teacher_hidden_states = x.detach()
                 intermediate_logits = self.lm_head(x)
+
+                # Logging the intermediate logits
+                print(f"Intermediate logits before adjustment at layer {i}: {intermediate_logits}")
+
+                if intermediate_logits is not None:
+                    intermediate_logits = rmsnorm(intermediate_logits)
+                    # Logging the intermediate logits after adjustment
+                    print(f"Intermediate logits after adjustment at layer {i}: {intermediate_logits}")
 
         if self.config.n_embd != self.config.orig_embd:
             x = self.transformer.proj_up(x)
 
         if distillation_mode is True:
-            student_hidden_states = x
             if intermediate_logits is not None:
                 intermediate_logits = rmsnorm(intermediate_logits)
         x = rmsnorm(x)
@@ -183,24 +188,29 @@ class GPT(nn.Module):
         loss = None
         ground_truth_loss = None
         distill_loss = None
+        soft_loss = None
 
         if targets is not None:
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-            if distillation_mode is True and teacher_hidden_states is not None and student_hidden_states is not None:
-                if intermediate_logits is not None:
-                    # Soft distillation loss
-                    student_log_probs = F.log_softmax(logits / 2, dim=-1)
-                    teacher_probs = F.softmax(intermediate_logits / 2, dim=-1)
-                    soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (2 ** 2)
+            if distillation_mode is True and intermediate_logits is not None:
+                # Soft distillation loss
+                student_log_probs = F.log_softmax(logits / 2, dim=-1)
+                teacher_probs = F.softmax(intermediate_logits / 2, dim=-1)
+                soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (2 ** 2)
 
-                    # Combine losses
-                    distill_loss = (
-                        5 * soft_loss +
-                        1 * ground_truth_loss
-                    )
+                # Logging the soft loss components
+                print(f"Student log probs: {student_log_probs}")
+                print(f"Teacher probs: {teacher_probs}")
+                print(f"Soft loss: {soft_loss}")
 
-                    loss = distill_loss
+                # Combine losses
+                distill_loss = (
+                    5 * soft_loss +
+                    1 * ground_truth_loss
+                )
+
+                loss = distill_loss
             else:
                 loss = ground_truth_loss
         else:
@@ -209,8 +219,13 @@ class GPT(nn.Module):
         if not return_logits:
             logits = None
 
-        return logits, loss, ground_truth_loss, distill_loss
+        # Logging the final logits and losses
+        print(f"Final logits: {logits}")
+        print(f"Ground truth loss: {ground_truth_loss}")
+        print(f"Distillation loss: {distill_loss}")
+        print(f"Soft loss: {soft_loss}")
 
+        return logits, loss, ground_truth_loss, distill_loss
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)
@@ -424,7 +439,7 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
 
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
-        (6, 16, 1024, 10000, 42, 0.0004),
+        (6, 16, 1024, 1000, 42, 0.0004),
         (12, 16, 1024, 40000, 28, 0.00015),
         (24, 16, 1024, 150000, 20, 0.0001)
     ]
