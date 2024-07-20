@@ -147,7 +147,7 @@ class GPT(nn.Module):
 
         self.lm_head = nn.Linear(config.orig_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight
-        self.layer_norm = nn.LayerNorm(config.hidden_size, eps=1e-5)
+        self.layer_norm = nn.LayerNorm(config.orig_embd, eps=1e-5)
 
         if config.n_embd != config.orig_embd:
             self.transformer.proj_down = nn.Linear(config.orig_embd, config.n_embd)
