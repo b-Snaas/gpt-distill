@@ -166,18 +166,14 @@ class GPT(nn.Module):
             if i == 11 and self.config.n_embd != self.config.orig_embd:
                 x = self.transformer.proj_down(x)  # Project back up after 12th layer
             if distillation_mode is True and self.prev_max_depth and i == self.prev_max_depth - 1:
+                x = rmsnorm(x)
                 intermediate_logits = self.lm_head(x)
 
                 # Logging the intermediate logits before adjustment
-                print(f"Intermediate logits before adjustment at layer {i}: {intermediate_logits}")
+                print(f"Intermediate logits at layer {i}: {intermediate_logits}")
 
         if self.config.n_embd != self.config.orig_embd:
             x = self.transformer.proj_up(x)
-
-        if distillation_mode is True and intermediate_logits is not None:
-            intermediate_logits = rmsnorm(intermediate_logits)
-            # Logging the intermediate logits after adjustment
-            print(f"Intermediate logits after adjustment: {intermediate_logits}")
 
         x = rmsnorm(x)
 
