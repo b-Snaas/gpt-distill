@@ -194,6 +194,9 @@ class GPT(nn.Module):
             ground_truth_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
             if distillation_mode is True and intermediate_logits is not None:
+
+                print(f"Intermediate logits after adjustment at layer {i}: {logits}")
+
                 # Soft distillation loss
                 student_log_probs = F.log_softmax(logits / 2, dim=-1)
                 teacher_probs = F.softmax(intermediate_logits / 2, dim=-1)
@@ -211,6 +214,13 @@ class GPT(nn.Module):
                 )
 
                 loss = distill_loss
+
+                                # Logging the final logits and losses
+                print(f"Final logits: {logits}")
+                print(f"Ground truth loss: {ground_truth_loss}")
+                print(f"Distillation loss: {distill_loss}")
+                print(f"Soft loss: {soft_loss}")
+
             else:
                 loss = ground_truth_loss
         else:
@@ -218,12 +228,6 @@ class GPT(nn.Module):
 
         if not return_logits:
             logits = None
-
-        # Logging the final logits and losses
-        print(f"Final logits: {logits}")
-        print(f"Ground truth loss: {ground_truth_loss}")
-        print(f"Distillation loss: {distill_loss}")
-        print(f"Soft loss: {soft_loss}")
 
         return logits, loss, ground_truth_loss, distill_loss
 
@@ -440,8 +444,8 @@ def train(input_bin="data/fineweb10B/fineweb_train_*.bin",
     progressive_schedule = [
         # (3, 12, 768, 2000, 48, 0.0005),
         (6, 16, 1024, 1000, 42, 0.0004),
-        (12, 16, 1024, 40000, 24, 0.00015),
-        (24, 16, 1024, 150000, 16, 0.0001)
+        (12, 16, 1024, 10, 10, 0.00015)
+        # (24, 16, 1024, 150000, 16, 0.0001)
     ]
 
     # Print the schedule at the start of training
